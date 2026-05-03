@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Process Lasso Qt
+GenericName=Process Manager
+Comment=Advanced Linux process manager with CPU affinity, ProBalance and Gaming Mode
+Exec=process-lasso-qt
+Icon=process-lasso
+Terminal=false
+Type=Application
+Categories=System;Monitor;Qt;
+Keywords=process;cpu;affinity;gaming;performance;
+StartupNotify=true

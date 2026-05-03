@@ -1,0 +1,27 @@
+# Maintainer: Cesar <cesar@acorninteractive.ca>
+pkgname=process-lasso-qt
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Native Qt6 Linux process manager — CPU affinity, ProBalance, Gaming Mode"
+arch=('x86_64')
+url="https://github.com/acorninteractive/process-lasso-qt"
+license=('GPL3')
+depends=('qt6-base' 'polkit' 'sudo')
+optdepends=('sqlite: Lutris game library support')
+makedepends=('cmake' 'ninja' 'qt6-base')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "$pkgname-$pkgver" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -GNinja
+    cmake --build build
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+    # Make install-helper script executable
+    chmod +x "$pkgdir/usr/share/process-lasso-qt/install-helper.sh"
+}

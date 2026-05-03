@@ -21,6 +21,7 @@ set(APP_SOURCES
     src/processmonitor.cpp
     src/ruleengine.cpp
     src/utils.cpp
+    src/gui/companionwidget.cpp
     src/gui/cpubarwidget.cpp
     src/gui/dialogs.cpp
     src/gui/gamingmodetab.cpp

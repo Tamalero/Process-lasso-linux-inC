@@ -8,6 +8,7 @@
 #include "probalancetab.h"
 #include "processtablewidget.h"
 #include "ruleseditor.h"
+#include "companionwidget.h"
 #include "settingstab.h"
 #include <QMainWindow>
 #include <QSystemTrayIcon>
@@ -23,6 +24,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
     QApplication     *m_app;
@@ -30,8 +32,10 @@ private:
     RuleEngine        m_ruleEngine;
     ProBalance       *m_proBalance = nullptr;
     ProcessMonitor   *m_monitor    = nullptr;
-    QSystemTrayIcon  *m_tray       = nullptr;
-    QAction          *m_trayGamingAction = nullptr;
+    QSystemTrayIcon  *m_tray             = nullptr;
+    QAction          *m_trayGamingAction    = nullptr;
+    QAction          *m_trayCompanionAction = nullptr;
+    CompanionWidget  *m_companion       = nullptr;
 
     QTabWidget       *m_tabs         = nullptr;
     CpuHistoryWidget *m_cpuHistory   = nullptr;

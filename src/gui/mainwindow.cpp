@@ -48,6 +48,25 @@ MainWindow::MainWindow(QApplication *app, QWidget *parent)
 
     buildUi();
     buildTray();
+
+    m_companion = new CompanionWidget(this);
+    connect(m_companion, &CompanionWidget::showHideRequested, this, [this]{
+        toggleWindow();
+        m_companion->setMainVisible(isVisible());
+    });
+    connect(m_companion, &CompanionWidget::maximizeRequested, this, [this]{
+        if (!isVisible()) { show(); raise(); activateWindow(); }
+        isMaximized() ? showNormal() : showMaximized();
+        m_companion->setMainVisible(true);
+    });
+    connect(m_companion, &CompanionWidget::gamingToggleRequested,
+            m_gamingTab, &GamingModeTab::toggleGamingMode);
+    connect(m_companion, &CompanionWidget::quitRequested,
+            this, &MainWindow::quitApp);
+    // Sync tray checkbox when companion is hidden via its own ✕ button.
+    // QWidget has no visibilityChanged signal; install an event filter instead.
+    m_companion->installEventFilter(this);
+
     applyTheme();
     startMonitor();
 
@@ -190,8 +209,19 @@ void MainWindow::buildTray()
     showAct->setFont([]{
         QFont f; f.setBold(true); return f;
     }());
+    menu->addAction(QStringLiteral("Maximize / Restore"), this, [this]{
+        if (!isVisible()) { show(); raise(); activateWindow(); }
+        isMaximized() ? showNormal() : showMaximized();
+        if (m_companion) m_companion->setMainVisible(true);
+    });
     m_trayGamingAction = menu->addAction(QStringLiteral("Enable Gaming Mode"),
         this, [this]{ m_gamingTab->toggleGamingMode(); });
+    menu->addSeparator();
+    m_trayCompanionAction = menu->addAction(QStringLiteral("Companion Panel"));
+    m_trayCompanionAction->setCheckable(true);
+    connect(m_trayCompanionAction, &QAction::toggled, this, [this](bool on){
+        if (on) m_companion->show(); else m_companion->hide();
+    });
     menu->addSeparator();
     menu->addAction(QStringLiteral("Quit"), this, &MainWindow::quitApp);
     m_tray->setContextMenu(menu);
@@ -216,6 +246,7 @@ void MainWindow::startMonitor()
                 m_cpuBars->updateCpu(percpu);
                 m_cpuHistory->updateCpu(percpu);
                 onCpuForTray(percpu);
+                m_companion->updateCpu(percpu);
             }, Qt::QueuedConnection);
     connect(m_monitor, &ProcessMonitor::logMessage,
             this, &MainWindow::appendLog, Qt::QueuedConnection);
@@ -286,6 +317,7 @@ void MainWindow::toggleWindow()
 {
     if (isVisible() && !isMinimized()) hide();
     else { show(); raise(); activateWindow(); }
+    if (m_companion) m_companion->setMainVisible(isVisible());
 }
 
 void MainWindow::quitApp()
@@ -298,6 +330,13 @@ void MainWindow::quitApp()
 }
 
 // ---------- close event ----------
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_companion && event->type() == QEvent::Hide)
+        if (m_trayCompanionAction) m_trayCompanionAction->setChecked(false);
+    return QMainWindow::eventFilter(obj, event);
+}
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
@@ -374,6 +413,7 @@ void MainWindow::onGamingModeChanged(bool active, bool elevateNice)
 {
     m_monitor->setGamingMode(active, elevateNice);
     updateTrayGamingAction(active, elevateNice);
+    m_companion->setGamingActive(active);
     appendLog(active ? QStringLiteral("Gaming mode enabled")
                      : QStringLiteral("Gaming mode disabled"));
 }

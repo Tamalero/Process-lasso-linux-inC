@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QHash>
 #include <QJsonObject>
 #include <QLabel>
@@ -38,6 +39,7 @@ private:
     QPushButton *m_parkBtn         = nullptr;
     QCheckBox   *m_niceCb          = nullptr;
     QWidget     *m_coreSelGroup    = nullptr;
+    QGridLayout *m_preferredGrid   = nullptr;
     QHash<int, QCheckBox *> m_preferredCbs;
     QSet<int>   m_smtSiblings;
 

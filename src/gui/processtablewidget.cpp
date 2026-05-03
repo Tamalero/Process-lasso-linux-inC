@@ -94,18 +94,19 @@ void ProcessTableWidget::refreshDisplay()
 {
     QList<ProcessInfo> sorted = m_snapshot;
     std::sort(sorted.begin(), sorted.end(), [this](const ProcessInfo &a, const ProcessInfo &b) {
-        bool less;
+        // Swap lo/hi for descending to keep strict weak ordering (never negate a < result).
+        const ProcessInfo &lo = m_sortAsc ? a : b;
+        const ProcessInfo &hi = m_sortAsc ? b : a;
         switch (m_sortCol) {
-            case 0: less = a.pid        < b.pid;             break;
-            case 1: less = a.name.toLower() < b.name.toLower(); break;
-            case 2: less = a.cpuPercent < b.cpuPercent;      break;
-            case 3: less = a.memRss     < b.memRss;          break;
-            case 4: less = a.nice       < b.nice;            break;
-            case 5: less = a.affinity   < b.affinity;        break;
-            case 6: less = a.ionice     < b.ionice;          break;
-            default: less = false;
+            case 0: return lo.pid        < hi.pid;
+            case 1: return lo.name.toLower() < hi.name.toLower();
+            case 2: return lo.cpuPercent < hi.cpuPercent;
+            case 3: return lo.memRss     < hi.memRss;
+            case 4: return lo.nice       < hi.nice;
+            case 5: return lo.affinity   < hi.affinity;
+            case 6: return lo.ionice     < hi.ionice;
+            default: return false;
         }
-        return m_sortAsc ? less : !less;
     });
     if (!m_filter.isEmpty()) {
         sorted.erase(std::remove_if(sorted.begin(), sorted.end(), [this](const ProcessInfo &p){

@@ -65,9 +65,8 @@ void GamingModeTab::buildUi()
     coreSelInfo->setWordWrap(true);
     coreSelLayout->addWidget(coreSelInfo);
     auto *gridWidget = new QWidget(m_coreSelGroup);
-    auto *gridLayout = new QGridLayout(gridWidget);
-    gridLayout->setObjectName(QStringLiteral("preferredGrid"));
-    gridLayout->setHorizontalSpacing(8); gridLayout->setVerticalSpacing(3);
+    m_preferredGrid = new QGridLayout(gridWidget);
+    m_preferredGrid->setHorizontalSpacing(8); m_preferredGrid->setVerticalSpacing(3);
     coreSelLayout->addWidget(gridWidget);
     auto *quickRow = new QHBoxLayout;
     auto *allBtn    = new QPushButton(QStringLiteral("All"), m_coreSelGroup);
@@ -215,10 +214,8 @@ void GamingModeTab::detectTopology()
     m_smtSiblings = getSmtSiblingsOf(m_topo.preferred);
     m_preferredCbs.clear();
     // Rebuild the grid
-    auto *gridLayout = qobject_cast<QGridLayout *>(
-        m_coreSelGroup->findChild<QWidget *>()->layout());
-    while (gridLayout->count()) {
-        auto *item = gridLayout->takeAt(0);
+    while (m_preferredGrid->count()) {
+        auto *item = m_preferredGrid->takeAt(0);
         if (item->widget()) item->widget()->deleteLater();
         delete item;
     }
@@ -232,7 +229,7 @@ void GamingModeTab::detectTopology()
             QStringLiteral("CPU %1%2").arg(cpu).arg(isSmt ? QStringLiteral(" (HT)") : QString{}),
             m_coreSelGroup);
         cb->setChecked(!offline.contains(cpu));
-        gridLayout->addWidget(cb, idx / 8, idx % 8);
+        m_preferredGrid->addWidget(cb, idx / 8, idx % 8);
         m_preferredCbs[cpu] = cb;
     }
     if (!offline.isEmpty()) {

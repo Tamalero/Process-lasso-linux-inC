@@ -1,9 +1,18 @@
 #include "gui/mainwindow.h"
+#include "verbose.h"
 #include <QApplication>
 #include <QIcon>
 
+bool gVerbose = false;
+
 int main(int argc, char *argv[])
 {
+    for (int i = 1; i < argc; ++i)
+        if (QByteArray(argv[i]) == "--verbose") { gVerbose = true; break; }
+
+    if (gVerbose)
+        fprintf(stderr, "[V] verbose mode enabled\n");
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("process-lasso-qt"));
     app.setApplicationDisplayName(QStringLiteral("Process Lasso Qt"));

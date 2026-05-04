@@ -20,15 +20,17 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
    - [Settings](#settings-tab)
    - [Log](#log-tab)
 8. [System Tray](#system-tray)
-9. [Rules Engine Deep Dive](#rules-engine-deep-dive)
-10. [ProBalance Deep Dive](#probalance-deep-dive)
-11. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
-12. [CPU Topology Detection](#cpu-topology-detection)
-13. [How CPU% is Measured](#how-cpu-is-measured)
-14. [Preset Rules](#preset-rules)
-15. [Keyboard Shortcuts](#keyboard-shortcuts)
-16. [Architecture Notes](#architecture-notes)
-17. [Known Limitations](#known-limitations)
+9. [CPU Usage Graphs](#cpu-usage-graphs)
+10. [Rules Engine Deep Dive](#rules-engine-deep-dive)
+11. [ProBalance Deep Dive](#probalance-deep-dive)
+12. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
+13. [CPU Topology Detection](#cpu-topology-detection)
+14. [How CPU% is Measured](#how-cpu-is-measured)
+15. [Preset Rules](#preset-rules)
+16. [Keyboard Shortcuts](#keyboard-shortcuts)
+17. [Architecture Notes](#architecture-notes)
+18. [Troubleshooting](#troubleshooting)
+19. [Known Limitations](#known-limitations)
 
 ---
 
@@ -36,6 +38,7 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 | Feature | Description |
 |---|---|
+| CPU usage graphs | "CPU History (avg)" rolling area chart + "Per-Core CPU" bars with frequency and temperature overlay |
 | Live process table | PID, name, CPU%, RSS memory, nice, CPU affinity, I/O class, ProBalance status |
 | Per-process CPU affinity | Topology-aware checkbox picker; `sched_setaffinity` on all TIDs |
 | Per-process nice priority | Full -20 to 19 range; presets for High / Normal / Low / Idle |
@@ -460,6 +463,35 @@ The application minimises to a system tray icon instead of exiting when the wind
 
 ---
 
+## CPU Usage Graphs
+
+Two live graphs appear at the top of the main window, side by side:
+
+### CPU History (avg)
+
+A rolling 120-sample area chart showing the **average CPU usage** across all logical cores over the last ~4 minutes (at the default 2 s refresh interval). The fill colour transitions from green → yellow → orange → red as the average rises.
+
+### Per-Core CPU
+
+A grid of per-logical-CPU bars, one per online CPU. Each bar shows:
+
+| Element | Description |
+|---|---|
+| CPU number | Left label (e.g. `7`) |
+| Usage bar | Colour-coded fill; transitions green → yellow → orange → red |
+| Percentage | Right-aligned inside the bar |
+| Frequency | Small text below the percentage (e.g. `3.80G`) — read from `scaling_cur_freq` |
+| Temperature tint | Orange overlay applied proportionally to temperature above 40 °C |
+| "off" label | Shown instead of a bar for CPUs taken offline by Gaming Mode |
+
+**Hover tooltip:** Shows `CPU N: X.X% | F.FF GHz | T°C` for online CPUs; `CPU N: offline (parked)` for parked CPUs.
+
+**Dynamic layout:** The number of columns adjusts automatically as the window is resized. The widget height grows to fit all bars — a 32-core system will show 4–8 columns depending on available width. The widget never clips or hides bars.
+
+**Data source:** Usage data comes from `/proc/stat` per-CPU jiffie deltas. Temperature from `hwmon` (`coretemp`, `k10temp`, `zenpower`). Frequency from `/sys/devices/system/cpu/cpuN/cpufreq/scaling_cur_freq`.
+
+---
+
 ## Rules Engine Deep Dive
 
 Rules are stored as a JSON array in `config.json` and loaded into `RuleEngine` at startup. Each rule has a UUID (`ruleId`), so editing and deleting are stable across reorders.
@@ -614,7 +646,52 @@ main.cpp
 
 The `ProcessMonitor` thread never touches Qt GUI objects directly — it emits `processSnapshotReady` and `cpuSnapshotReady` signals which are dispatched to the GUI thread via `Qt::QueuedConnection`. Config updates from the GUI are passed to the monitor through a `QMutex`-protected copy.
 
+**`/proc` file reading:** All `/proc` virtual files are read with `QFile::readAll()` followed by `split('\n')`. Never use `while (!f.atEnd()) { f.readLine() }` — `/proc` files report `size() == 0` to the VFS, so `atEnd()` returns `true` immediately and the loop body never executes.
+
 CPU parking and helper operations run in transient `QThread` workers spun up on demand so they never block the GUI event loop.
+
+---
+
+## Troubleshooting
+
+### Verbose / debug mode
+
+Pass `--verbose` on the command line to enable runtime diagnostics printed to stderr:
+
+```bash
+./build/process-lasso-qt --verbose
+# or filter just the verbose lines:
+./build/process-lasso-qt --verbose 2>&1 | grep '\[V\]'
+```
+
+Instrumented paths include:
+
+- `ProcessMonitor` — logs `percpu size` and whether `cpuSnapshotReady` was emitted each cycle
+- `CpuBarsWidget` — logs CPU count, widget geometry, visibility, height recalculations, and paint calls
+- `CpuHistoryWidget` — logs the computed average and history depth on each update
+
+If the CPU graphs are not visible, run with `--verbose` and look for:
+- `percpu size=0` — means `/proc/stat` is not being read correctly
+- `cpuSnapshotReady NOT emitted` — the signal is never sent to the widgets
+- `CpuBarsWidget::updateCpu` not appearing — the signal is not connected
+
+### CPU graphs not appearing
+
+The most common cause is that the CPU graphs need at least one `cpuSnapshotReady` signal to draw. Check:
+
+1. The monitor thread is running (a log entry should appear within 2–3 seconds of startup).
+2. The `--verbose` output shows `percpu size > 0` and `emitting cpuSnapshotReady`.
+3. The window is wide enough for at least one bar column (minimum ~90 px per column).
+
+### CPUs left parked after a crash
+
+If the application exits uncleanly while Gaming Mode is active, CPUs may remain offline. Recover with:
+
+```bash
+# Unpark all offline CPUs
+for cpu in /sys/devices/system/cpu/cpu*/online; do echo 1 | sudo tee "$cpu"; done
+# Or use the Reset All Changes button if the GUI can start
+```
 
 ---
 

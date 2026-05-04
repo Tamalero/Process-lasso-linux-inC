@@ -10,8 +10,10 @@ public:
     explicit CpuBarsWidget(QWidget *parent = nullptr);
 public slots:
     void updateCpu(const QList<double> &percpu);
+    QSize sizeHint() const override;
 protected:
     void paintEvent(QPaintEvent *) override;
+    void resizeEvent(QResizeEvent *ev) override;
     bool event(QEvent *ev) override;
 private:
     QList<double>    m_pcts;
@@ -21,6 +23,7 @@ private:
 
     int  cols(int n) const;
     int  barIndexAt(const QPoint &pos) const;
+    void applyNeededHeight();
     void readTemps();
     void readFreqs();
 };

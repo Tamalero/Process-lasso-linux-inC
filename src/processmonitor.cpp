@@ -1,6 +1,7 @@
 #include "processmonitor.h"
 #include "cpupark.h"
 #include "utils.h"
+#include "verbose.h"
 #include <QDir>
 #include <QFile>
 #include <QThread>
@@ -198,9 +199,11 @@ QList<double> ProcessMonitor::readPercpuUsage()
 {
     QFile f(QStringLiteral("/proc/stat"));
     if (!f.open(QIODevice::ReadOnly)) return {};
+    // /proc virtual files report size 0, so QFile::atEnd() returns true
+    // immediately. Read everything at once then split on newlines.
+    const QByteArray data = f.readAll();
     QList<double> result;
-    while (!f.atEnd()) {
-        const QByteArray line = f.readLine();
+    for (const QByteArray &line : data.split('\n')) {
         if (!line.startsWith("cpu") || line.startsWith("cpu ")) continue;
         const auto fields = line.split(' ');
         if (fields.size() < 8) continue;
@@ -348,7 +351,14 @@ void ProcessMonitor::run()
             if (now - lastSnapshot >= snapshotInterval) {
                 emit processSnapshotReady(snapshot);
                 const auto percpu = readPercpuUsage();
-                if (!percpu.isEmpty()) emit cpuSnapshotReady(percpu);
+                VLOG("monitor: percpu size=%lld", (long long)percpu.size());
+                if (!percpu.isEmpty()) {
+                    VLOG("monitor: emitting cpuSnapshotReady (first=%.1f%% last=%.1f%%)",
+                         percpu.first(), percpu.last());
+                    emit cpuSnapshotReady(percpu);
+                } else {
+                    VLOG("monitor: percpu empty — cpuSnapshotReady NOT emitted");
+                }
                 lastSnapshot = now;
             }
 

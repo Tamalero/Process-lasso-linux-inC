@@ -78,6 +78,7 @@ MainWindow::~MainWindow()
 {
     m_monitor->stop();
     m_monitor->wait(3000);
+    delete m_proBalance;
     saveConfig();
 }
 
@@ -91,16 +92,32 @@ void MainWindow::buildUi()
     root->setContentsMargins(6, 6, 6, 6);
     root->setSpacing(4);
 
-    // CPU widgets row
+    // CPU widgets row — each graph gets a header label in its own column
     auto *cpuRow = new QHBoxLayout;
-    m_cpuHistory = new CpuHistoryWidget(this);
-    m_cpuHistory->setMinimumHeight(80);
-    m_cpuHistory->setMaximumHeight(100);
-    m_cpuBars = new CpuBarsWidget(this);
-    m_cpuBars->setMinimumHeight(80);
-    m_cpuBars->setMaximumHeight(100);
-    cpuRow->addWidget(m_cpuHistory, 3);
-    cpuRow->addWidget(m_cpuBars, 2);
+    cpuRow->setSpacing(6);
+    {
+        auto *col = new QVBoxLayout;
+        col->setSpacing(2);
+        col->setContentsMargins(0, 0, 0, 0);
+        auto *lbl = new QLabel(QStringLiteral("CPU History (avg)"), central);
+        lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        col->addWidget(lbl);
+        m_cpuHistory = new CpuHistoryWidget(central);
+        m_cpuHistory->setFixedHeight(80);
+        col->addWidget(m_cpuHistory);
+        cpuRow->addLayout(col, 3);
+    }
+    {
+        auto *col = new QVBoxLayout;
+        col->setSpacing(2);
+        col->setContentsMargins(0, 0, 0, 0);
+        auto *lbl = new QLabel(QStringLiteral("Per-Core CPU"), central);
+        lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        col->addWidget(lbl);
+        m_cpuBars = new CpuBarsWidget(central);
+        col->addWidget(m_cpuBars);
+        cpuRow->addLayout(col, 2);
+    }
     root->addLayout(cpuRow);
 
     // Main tabs

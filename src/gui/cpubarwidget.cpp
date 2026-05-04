@@ -1,5 +1,6 @@
 #include "cpubarwidget.h"
 #include "../cputopology.h"
+#include "../verbose.h"
 #include <QDir>
 #include <QFile>
 #include <QEvent>
@@ -8,6 +9,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QResizeEvent>
 #include <QSizePolicy>
 #include <QToolTip>
 #include <algorithm>
@@ -98,19 +100,43 @@ void CpuBarsWidget::readFreqs()
 
 void CpuBarsWidget::updateCpu(const QList<double> &percpu)
 {
+    VLOG("CpuBarsWidget::updateCpu: %lld CPUs, widget %dx%d visible=%d",
+         (long long)percpu.size(), width(), height(), (int)isVisible());
     m_pcts = percpu;
     m_offline = getOfflineCpuSet();
     readTemps();
     readFreqs();
+    applyNeededHeight();
     update();
-    const int n = percpu.size();
+}
+
+void CpuBarsWidget::applyNeededHeight()
+{
+    const int n = m_pcts.size();
     if (n == 0) return;
     const int barH = 26, gap = 3;
     const int c = cols(n);
     const int rows = (n + c - 1) / c;
     const int needed = rows * (barH + gap) + gap + 4;
-    setMinimumHeight(needed);
-    setMaximumHeight(needed);
+    VLOG("CpuBarsWidget::applyNeededHeight: n=%d cols=%d rows=%d needed=%d current=%d",
+         n, c, rows, needed, minimumHeight());
+    if (needed != minimumHeight()) {
+        setMinimumHeight(needed);
+        setMaximumHeight(needed);
+        updateGeometry();
+    }
+}
+
+QSize CpuBarsWidget::sizeHint() const
+{
+    return QSize(200, minimumHeight());
+}
+
+void CpuBarsWidget::resizeEvent(QResizeEvent *ev)
+{
+    VLOG("CpuBarsWidget::resizeEvent: %dx%d", ev->size().width(), ev->size().height());
+    QWidget::resizeEvent(ev);
+    applyNeededHeight();
 }
 
 int CpuBarsWidget::cols(int n) const
@@ -169,6 +195,12 @@ bool CpuBarsWidget::event(QEvent *ev)
 void CpuBarsWidget::paintEvent(QPaintEvent *)
 {
     const int n = m_pcts.size(); if (!n) return;
+    if (gVerbose) {
+        static int s_paintCount = 0;
+        if (++s_paintCount == 1 || s_paintCount % 20 == 0)
+            VLOG("CpuBarsWidget::paintEvent #%d: %d CPUs, widget %dx%d",
+                 s_paintCount, n, width(), height());
+    }
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const int w = width(), barH = 26, gap = 3;
@@ -237,8 +269,8 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
 
 CpuHistoryWidget::CpuHistoryWidget(QWidget *parent) : QWidget(parent)
 {
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    setFixedHeight(36);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setMinimumHeight(60);
 }
 
 void CpuHistoryWidget::updateCpu(const QList<double> &percpu)
@@ -248,6 +280,8 @@ void CpuHistoryWidget::updateCpu(const QList<double> &percpu)
         for (double v : percpu) avg += v;
         avg /= percpu.size();
     }
+    VLOG("CpuHistoryWidget::updateCpu: avg=%.1f%% history=%lld widget %dx%d visible=%d",
+         avg, (long long)(m_history.size() + 1), width(), height(), (int)isVisible());
     m_history.append(avg);
     if (m_history.size() > HISTORY_LEN) m_history.removeFirst();
     update();

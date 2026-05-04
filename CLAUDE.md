@@ -10,7 +10,8 @@ direct syscalls. No Python, no psutil, no subprocess (except the privileged help
 ```
 CMakeLists.txt          — two targets: process-lasso-qt, process-lasso-helper
 src/
-  main.cpp              — entry point; creates MainWindow
+  main.cpp              — entry point; creates MainWindow; defines gVerbose
+  verbose.h             — gVerbose flag + VLOG macro; enable with --verbose CLI flag
   processinfo.h         — plain struct, no QObject
   config.{h,cpp}        — load/save ~/.config/process-lasso-qt/config.json
   ruleengine.{h,cpp}    — match + apply rules to PIDs
@@ -21,7 +22,8 @@ src/
   utils.{h,cpp}         — affinity, nice, ionice, /proc helpers
   gui/
     mainwindow.{h,cpp}  — QMainWindow; owns all objects; wires all signals
-    cpubarwidget.{h,cpp}— CpuBarsWidget + CpuHistoryWidget (paint-only widgets)
+    cpubarwidget.{h,cpp}— CpuBarsWidget (per-core bars, dynamic height via applyNeededHeight/resizeEvent)
+                          + CpuHistoryWidget (avg CPU area graph, fixed 80 px height)
     processtablewidget.{h,cpp} — QTableWidget subclass with context menu
     ruleseditor.{h,cpp} — rule list table + add/edit/delete/presets
     probalancetab.{h,cpp}— ProBalance settings form
@@ -73,7 +75,7 @@ locked inside `defaultAffinity() const`. Any time you add a const getter that re
 | Object | Owner | Notes |
 |--------|-------|-------|
 | `RuleEngine m_ruleEngine` | `MainWindow` (by value) | shared with ProcessMonitor* ptr |
-| `ProBalance *m_proBalance` | `MainWindow` | raw new, deleted in ~MainWindow |
+| `ProBalance *m_proBalance` | `MainWindow` | raw new, deleted in ~MainWindow **after** `m_monitor->wait()` — the monitor thread calls `tick()` directly, so the thread must be stopped first |
 | `ProcessMonitor *m_monitor` | `MainWindow` | QThread; call stop() then wait() before delete |
 | All tab widgets | `MainWindow` via QTabWidget | Qt parent chain owns them |
 | `GamingModeTab::m_watchTimer` | `GamingModeTab` | created once in buildUi() |
@@ -247,6 +249,52 @@ avoid infinite recursion through the method shadowing the free function.
 | `mutable QMutex` for const method | processmonitor.h | `mutable QMutex m_configMux` |
 | ProBalance ctor takes LogCb not QObject* | mainwindow.cpp | Lambda `[this](const QString &msg){ appendLog(msg); }` |
 | `QStringList{helperPath(), ...}` fails | cpupark.cpp | Use `QStringList() << a << b` idiom |
+
+## /proc virtual filesystem gotcha (critical)
+
+**`QFile::atEnd()` always returns `true` for `/proc` virtual files.**  
+Virtual files report `size() == 0` to the VFS layer, so Qt's `atEnd()` check
+(`pos() >= size()`) short-circuits immediately and the loop body never runs.
+
+**Wrong** — loop body never executes:
+```cpp
+while (!f.atEnd()) {
+    const QByteArray line = f.readLine(); // never reached
+    ...
+}
+```
+
+**Correct** — read everything at once, then split:
+```cpp
+const QByteArray data = f.readAll();
+for (const QByteArray &line : data.split('\n')) {
+    ...
+}
+```
+
+This applies to every `/proc` file: `/proc/stat`, `/proc/[pid]/stat`, `/proc/[pid]/comm`, etc.
+All existing readers in this codebase use `readAll()` — do not introduce `readLine()` loops.
+
+---
+
+## Verbose / debug mode
+
+Pass `--verbose` on the command line (or via `run.sh --verbose`) to enable runtime
+diagnostics. All output goes to stderr prefixed with `[V]`.
+
+```
+./run.sh --verbose 2>&1 | grep '\[V\]'
+```
+
+Instrumented code paths:
+- `ProcessMonitor::run()` — logs `percpu size` and whether `cpuSnapshotReady` was emitted
+- `CpuBarsWidget::updateCpu` — CPU count, widget geometry, visibility
+- `CpuBarsWidget::applyNeededHeight` — n, cols, rows, needed vs current height
+- `CpuBarsWidget::resizeEvent` — new geometry on every resize
+- `CpuBarsWidget::paintEvent` — first paint + every 20th (rate-limited)
+- `CpuHistoryWidget::updateCpu` — average, history depth, widget geometry
+
+The macro is defined in `src/verbose.h`; `gVerbose` is defined in `src/main.cpp`.
 
 ---
 

@@ -36,7 +36,9 @@ helper/
 packaging/
   PKGBUILD              — Arch Linux package
   process-lasso.desktop — XDG desktop entry
+  process-lasso.png     — 256×256 app icon (Catppuccin Mocha CPU chip)
   install-helper.sh     — root install script for helper + sudoers
+  build-appimage.sh     — Type 2 AppImage build script (see AppImage section below)
 ```
 
 ---
@@ -153,6 +155,35 @@ ALL ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper
 not a macro. **Never** pass it to `QStringLiteral()` — use `helperPath()` helper
 function defined in cpupark.cpp which returns `QStringLiteral("/usr/local/bin/process-lasso-helper")`.
 
+### install-helper.sh — fixed bug (do not regress)
+
+`CpuPark::installHelper()` calls:
+```
+pkexec bash /path/to/install-helper.sh
+```
+The script resolves the helper binary **relative to its own location**:
+```bash
+HELPER_SRC="$(cd "$(dirname "$0")/.." && pwd)/bin/process-lasso-helper"
+```
+This works for both system installs (`/usr/share/…` → `../bin/…` = `/usr/bin/…`) and
+AppImage mounts (`$APPDIR/usr/share/…` → `$APPDIR/usr/bin/…`).
+
+**Do not** restore the old `${1:-...}` form. The C++ caller used to pass a username
+as `$1`; the script incorrectly used it as the helper source path, causing a silent
+install failure (`[[ ! -f "cesarin" ]]`).
+
+### CpuPark::installHelper() — AppImage path fallback
+
+`installHelper()` in `cpupark.cpp` searches for `install-helper.sh` in two places:
+
+1. `QStandardPaths::locate(AppDataLocation, "install-helper.sh")` — standard XDG
+   locations; works for system and user installs.
+2. `QCoreApplication::applicationDirPath() + "/../share/process-lasso-qt/install-helper.sh"`
+   — fallback for AppImage and portable builds where `QStandardPaths` does not
+   search inside `$APPDIR`.
+
+**Both** must remain in place. Do not remove the fallback.
+
 ---
 
 ## Config schema (config.json)
@@ -241,6 +272,8 @@ avoid infinite recursion through the method shadowing the free function.
 | `QVariant::operator<` removed | processtablewidget.cpp | Explicit typed switch in sort lambda |
 | `qAsConst` deprecated (Qt 6.6+) | processmonitor.cpp | Use `std::as_const` |
 | `QStandardPaths::DataLocation` renamed | cpupark.cpp | Use `AppDataLocation` |
+| `installHelper()` script not found in AppImage | cpupark.cpp | `applicationDirPath()` fallback added; `#include <QCoreApplication>` required |
+| `install-helper.sh` silent failure | packaging/install-helper.sh | `$1` was username, not path; script now always uses `dirname "$0"/../bin/…` |
 | `QTextEdit::setMaximumBlockCount` DNE | mainwindow.cpp | Use `->document()->setMaximumBlockCount()` |
 | `QStringLiteral(CONSTEXPR_VAR)` fails | cpupark.cpp | Use inline `helperPath()` function |
 | `QHelpEvent` incomplete | cpubarwidget.cpp | `#include <QHelpEvent>` |
@@ -311,6 +344,60 @@ cmake --build build -j$(nproc)
 
 Requirements: `qt6-base`, `cmake ≥ 3.20`, `gcc`/`clang` with C++17.  
 No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
+
+---
+
+## AppImage packaging
+
+```bash
+cd process-lasso-qt
+bash packaging/build-appimage.sh
+# Outputs: process-lasso-qt-1.0.0-x86_64.AppImage  (~67 MB)
+```
+
+`packaging/build-appimage.sh` is a self-contained build script:
+
+1. **Downloads tools** into `packaging/appimage-tools/` (skips if already cached):
+   - `linuxdeploy-x86_64.AppImage`
+   - `linuxdeploy-plugin-qt-x86_64.AppImage`
+   - `appimagetool-x86_64.AppImage`
+
+2. **Patches bundled `strip`** — both linuxdeploy and its Qt plugin bundle an old
+   `strip` binary that fails on `.relr.dyn` ELF sections (RELR relocations used by
+   modern Arch/CachyOS glibc). The script extracts each AppImage once into
+   `packaging/appimage-tools/linuxdeploy-unpacked/` and
+   `packaging/appimage-tools/linuxdeploy-plugin-qt-unpacked/`, then replaces
+   the bundled `strip` with `/usr/bin/strip` from the host.  
+   **Re-extraction is triggered automatically if the AppImage is newer than the
+   unpacked directory.**
+
+3. **Release build** via `cmake -B build-appimage` (separate from `build/`).
+
+4. **Populates `AppDir/`** via `DESTDIR=AppDir cmake --install build-appimage`.
+   CMake installs both binaries, the `.desktop` file, and `install-helper.sh`
+   into the correct `usr/…` hierarchy.
+
+5. **Bundles Qt** using `linuxdeploy-unpacked/AppRun` with `--plugin qt`.
+   The Qt plugin copies platform plugins (XCB), image format plugins, input
+   context plugins, and all shared-library dependencies. It also writes a
+   `qt.conf` next to the binary so Qt finds its plugins at runtime.
+
+6. **Patches AppRun** to prepend `$APPDIR/usr/share` to `XDG_DATA_DIRS` so
+   `QStandardPaths::AppDataLocation` finds `install-helper.sh` inside the
+   AppImage mount (belt-and-suspenders alongside the `applicationDirPath()`
+   fallback in `cpupark.cpp`).
+
+7. **Packages** with `appimagetool --comp zstd` → Type 2 squashfs AppImage.
+
+**Build artifacts excluded from git** (`.gitignore`):
+`AppDir/`, `build-appimage/`, `*.AppImage`, `packaging/appimage-tools/`
+
+**AppImage runtime dependencies** (everything else is bundled):
+- FUSE 2 / FUSE 3 compat (`fuse2` on Arch) to mount the squashfs
+- `polkit` (`pkexec`) for the one-time helper installation
+- `sudo` with NOPASSWD for `process-lasso-helper` at runtime
+
+---
 
 ---
 

@@ -149,15 +149,27 @@ if ! grep -q 'XDG_DATA_DIRS' "$APPRUN"; then
 fi
 
 # ── Package as Type 2 AppImage ────────────────────────────────────────────────
+#
+# --updateinformation embeds a gh-releases-zsync block so Gear Lever / AppImageUpdate
+# can find and apply delta updates automatically.  appimagetool also invokes
+# zsyncmake (must be on PATH) to produce a companion .zsync file alongside the
+# AppImage; upload both to the GitHub release.
+
+ZSYNC_FILENAME="$(basename "$OUTPUT").zsync"
+UPDATE_INFO="gh-releases-zsync|Tamalero|Process-lasso-linux-inC|latest|process-lasso-qt-*-${ARCH}.AppImage.zsync"
 
 echo ""
 echo "→ Packaging AppImage …"
 ARCH="$ARCH" \
 "$TOOLS_DIR/appimagetool" \
     --comp zstd \
+    --updateinformation "$UPDATE_INFO" \
     "$APPDIR" \
     "$OUTPUT"
 
 echo ""
 echo "✓ AppImage ready: $OUTPUT"
 echo "  Size: $(du -sh "$OUTPUT" | cut -f1)"
+if [[ -f "$PROJECT_DIR/$ZSYNC_FILENAME" ]]; then
+    echo "✓ zsync  ready: $PROJECT_DIR/$ZSYNC_FILENAME"
+fi

@@ -97,15 +97,11 @@ void MainWindow::buildUi()
     cpuRow->setSpacing(6);
     {
         auto *col = new QVBoxLayout;
-        col->setSpacing(2);
+        col->setSpacing(0);
         col->setContentsMargins(0, 0, 0, 0);
-        auto *lbl = new QLabel(QStringLiteral("CPU History (avg)"), central);
-        lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        col->addWidget(lbl);
         m_cpuHistory = new CpuHistoryWidget(central);
-        m_cpuHistory->setFixedHeight(80);
         col->addWidget(m_cpuHistory);
-        cpuRow->addLayout(col, 3);
+        cpuRow->addLayout(col, 1);
     }
     {
         auto *col = new QVBoxLayout;
@@ -116,7 +112,7 @@ void MainWindow::buildUi()
         col->addWidget(lbl);
         m_cpuBars = new CpuBarsWidget(central);
         col->addWidget(m_cpuBars);
-        cpuRow->addLayout(col, 2);
+        cpuRow->addLayout(col, 3);
     }
     root->addLayout(cpuRow);
 

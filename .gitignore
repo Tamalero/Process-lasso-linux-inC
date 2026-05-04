@@ -9,4 +9,5 @@ compile_commands.json
 # AppImage build artifacts
 AppDir/
 *.AppImage
+*.AppImage.zsync
 packaging/appimage-tools/

@@ -23,7 +23,8 @@ src/
   gui/
     mainwindow.{h,cpp}  — QMainWindow; owns all objects; wires all signals
     cpubarwidget.{h,cpp}— CpuBarsWidget (per-core bars, dynamic height via applyNeededHeight/resizeEvent)
-                          + CpuHistoryWidget (avg CPU area graph, fixed 80 px height)
+                          + CpuHistoryWidget (avg CPU area graph, expands to match bars column height,
+                            title drawn inside the graph as text overlay)
     processtablewidget.{h,cpp} — QTableWidget subclass with context menu
     ruleseditor.{h,cpp} — rule list table + add/edit/delete/presets
     probalancetab.{h,cpp}— ProBalance settings form
@@ -352,7 +353,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.0.0-x86_64.AppImage  (~67 MB)
+# Outputs: process-lasso-qt-1.1.0-x86_64.AppImage  (~67 MB)
+#          process-lasso-qt-1.1.0-x86_64.AppImage.zsync  (~234 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -387,10 +389,29 @@ bash packaging/build-appimage.sh
    AppImage mount (belt-and-suspenders alongside the `applicationDirPath()`
    fallback in `cpupark.cpp`).
 
-7. **Packages** with `appimagetool --comp zstd` → Type 2 squashfs AppImage.
+7. **Packages** with `appimagetool --comp zstd --updateinformation <gh-releases-zsync URL>`
+   → Type 2 squashfs AppImage with embedded update metadata.  
+   `appimagetool` then calls `zsyncmake` automatically to produce a companion
+   `.zsync` file. Upload **both** `*.AppImage` and `*.AppImage.zsync` to every
+   GitHub release so Gear Lever / AppImageUpdate can perform delta updates.
+
+### AppImage auto-update (Gear Lever / AppImageUpdate)
+
+The embedded update information string:
+```
+gh-releases-zsync|Tamalero|Process-lasso-linux-inC|latest|process-lasso-qt-*-x86_64.AppImage.zsync
+```
+This tells any AppImage-aware update client to:
+- Query the GitHub releases API for the latest release of the repo
+- Download the `.zsync` file from that release
+- Apply delta (rsync-style) patching — only changed blocks are downloaded
+
+**Requirement**: `zsync` (`pacman -S zsync`) must be installed on the host to run
+the build script. `appimagetool` bundles `zsyncmake` internally as a fallback,
+but system `zsyncmake` takes precedence when on `PATH`.
 
 **Build artifacts excluded from git** (`.gitignore`):
-`AppDir/`, `build-appimage/`, `*.AppImage`, `packaging/appimage-tools/`
+`AppDir/`, `build-appimage/`, `*.AppImage`, `*.AppImage.zsync`, `packaging/appimage-tools/`
 
 **AppImage runtime dependencies** (everything else is bundled):
 - FUSE 2 / FUSE 3 compat (`fuse2` on Arch) to mount the squashfs
@@ -398,6 +419,27 @@ bash packaging/build-appimage.sh
 - `sudo` with NOPASSWD for `process-lasso-helper` at runtime
 
 ---
+
+---
+
+## CPU graph widget design notes
+
+### CpuBarsWidget (per-core bars)
+- Each bar has a **left label zone** (`labelW = 52 px`) painted with `"Core N"` left-aligned.
+- Bar fill starts at `x + labelW + 1`; percentage right-aligned in remaining space; frequency
+  sub-line at bottom (`"%1 GHz"` format, 9 px font).
+- Column count calculated by `cols()` using `w / 120` as max-columns divisor; minimum bar
+  width floor is `110 px` (both in `paintEvent` and `barIndexAt`).
+- Layout stretch in `cpuRow` QHBoxLayout: history column = **1**, bars column = **3**
+  (25 % / 75 % split).
+
+### CpuHistoryWidget (avg history graph)
+- Vertical size policy is `Expanding` so it fills the full left-column height set by the
+  taller bars column — no external QLabel above it.
+- `"CPU History (avg)"` text is drawn as an **in-widget overlay** (top-left, 10 px monospace,
+  alpha 180) rather than as a separate QLabel in the layout.
+- `paintEvent` draws background + border unconditionally; graph path only when `n >= 2`.
+- **Do not** add `setFixedHeight()` back — it breaks the full-height fill.
 
 ---
 

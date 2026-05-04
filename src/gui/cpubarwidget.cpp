@@ -142,7 +142,7 @@ void CpuBarsWidget::resizeEvent(QResizeEvent *ev)
 int CpuBarsWidget::cols(int n) const
 {
     const int w = width() > 0 ? width() : 900;
-    const int maxCols = std::min(std::max(1, w / 90), n);
+    const int maxCols = std::min(std::max(1, w / 120), n);
     const int lo = std::max(1, maxCols / 2);
     for (int c = maxCols; c >= lo; --c)
         if (n % c == 0) return c;
@@ -159,7 +159,7 @@ int CpuBarsWidget::barIndexAt(const QPoint &pos) const
     const int n = m_pcts.size(); if (!n) return -1;
     const int barH = 26, gap = 3;
     const int c = cols(n);
-    const int barW = std::max(60, (width() - gap*(c+1)) / c);
+    const int barW = std::max(110, (width() - gap*(c+1)) / c);
     for (int i = 0; i < n; ++i) {
         int col = i % c, row = i / c;
         int x = gap + col*(barW+gap), y = gap + row*(barH+gap);
@@ -205,8 +205,8 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
     p.setRenderHint(QPainter::Antialiasing);
     const int w = width(), barH = 26, gap = 3;
     const int c = cols(n);
-    const int barW = std::max(60, (w - gap*(c+1)) / c);
-    const int labelW = 30;
+    const int barW = std::max(110, (w - gap*(c+1)) / c);
+    const int labelW = 52;
     QFont font; font.setPixelSize(10); font.setFamily(QStringLiteral("monospace"));
     QFont freqFont; freqFont.setPixelSize(9); freqFont.setFamily(QStringLiteral("monospace"));
     p.setFont(font);
@@ -242,7 +242,8 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
         p.setPen(offline ? OFFLINE_TEXT : ONLINE_TEXT);
         p.setFont(font);
         p.drawText(x+2, y, labelW-2, barH,
-                   Qt::AlignVCenter | Qt::AlignRight, QString::number(i));
+                   Qt::AlignVCenter | Qt::AlignLeft,
+                   QStringLiteral("Core %1").arg(i));
         // Percentage
         if (offline) {
             p.setPen(OFFLINE_TEXT);
@@ -258,7 +259,7 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
                 p.setPen(QColor(180, 200, 220, 160));
                 p.drawText(x+labelW+2, y+barH-11, barW-labelW-4, 11,
                            Qt::AlignVCenter | Qt::AlignRight,
-                           QStringLiteral("%1G").arg(m_freqs[i], 0, 'f', 2));
+                           QStringLiteral("%1 GHz").arg(m_freqs[i], 0, 'f', 2));
                 p.setFont(font);
             }
         }
@@ -269,7 +270,7 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
 
 CpuHistoryWidget::CpuHistoryWidget(QWidget *parent) : QWidget(parent)
 {
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMinimumHeight(60);
 }
 
@@ -289,29 +290,38 @@ void CpuHistoryWidget::updateCpu(const QList<double> &percpu)
 
 void CpuHistoryWidget::paintEvent(QPaintEvent *)
 {
-    const int n = m_history.size(); if (n < 2) return;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const int w = width(), h = height();
     p.setPen(Qt::NoPen); p.setBrush(BG);
     p.drawRect(0, 0, w, h);
 
-    const int offset = HISTORY_LEN - n;
-    auto xAt = [&](int i) { return (int)(w * (offset+i) / (HISTORY_LEN-1)); };
-    auto yAt = [&](double pct) { return h-2-(int)((h-4)*pct/100.0); };
+    const int n = m_history.size();
+    if (n >= 2) {
+        const int offset = HISTORY_LEN - n;
+        auto xAt = [&](int i) { return (int)(w * (offset+i) / (HISTORY_LEN-1)); };
+        auto yAt = [&](double pct) { return h-2-(int)((h-4)*pct/100.0); };
 
-    QPainterPath path;
-    path.moveTo(xAt(0), h-2);
-    path.lineTo(xAt(0), yAt(m_history[0]));
-    for (int i = 1; i < n; ++i) path.lineTo(xAt(i), yAt(m_history[i]));
-    path.lineTo(xAt(n-1), h-2);
-    path.closeSubpath();
+        QPainterPath path;
+        path.moveTo(xAt(0), h-2);
+        path.lineTo(xAt(0), yAt(m_history[0]));
+        for (int i = 1; i < n; ++i) path.lineTo(xAt(i), yAt(m_history[i]));
+        path.lineTo(xAt(n-1), h-2);
+        path.closeSubpath();
 
-    QLinearGradient grad(0, 0, 0, h);
-    QColor top = barColor(m_history.last()); top.setAlpha(180);
-    QColor bot = top; bot.setAlpha(40);
-    grad.setColorAt(0.0, top); grad.setColorAt(1.0, bot);
-    p.setBrush(grad); p.drawPath(path);
+        QLinearGradient grad(0, 0, 0, h);
+        QColor top = barColor(m_history.last()); top.setAlpha(180);
+        QColor bot = top; bot.setAlpha(40);
+        grad.setColorAt(0.0, top); grad.setColorAt(1.0, bot);
+        p.setBrush(grad); p.drawPath(path);
+    }
+
     p.setBrush(Qt::NoBrush); p.setPen(QPen(BORDER, 1));
     p.drawRect(0, 0, w-1, h-1);
+
+    QFont lf; lf.setPixelSize(10); lf.setFamily(QStringLiteral("monospace"));
+    p.setFont(lf);
+    p.setPen(QColor(239, 240, 241, 180));
+    p.drawText(4, 4, w-8, h-8, Qt::AlignTop | Qt::AlignLeft,
+               QStringLiteral("CPU History (avg)"));
 }

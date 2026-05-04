@@ -1,9 +1,10 @@
 #!/bin/bash
 # install-helper.sh — run via pkexec to install the privileged helper
-# Usage: pkexec bash /path/to/install-helper.sh /path/to/process-lasso-helper
+# Usage: pkexec bash /path/to/install-helper.sh
+# The helper binary is expected at ../bin/process-lasso-helper relative to this script.
 set -euo pipefail
 
-HELPER_SRC="${1:-$(dirname "$0")/../bin/process-lasso-helper}"
+HELPER_SRC="$(cd "$(dirname "$0")/.." && pwd)/bin/process-lasso-helper"
 HELPER_DST="/usr/local/bin/process-lasso-helper"
 SUDOERS_FILE="/etc/sudoers.d/process-lasso"
 

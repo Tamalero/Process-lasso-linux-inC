@@ -1,6 +1,12 @@
 build/
+build-appimage/
 *.o
 *.a
 *.so
 .cache/
 compile_commands.json
+
+# AppImage build artifacts
+AppDir/
+*.AppImage
+packaging/appimage-tools/

@@ -1,5 +1,6 @@
 #include "cpupark.h"
 #include "cputopology.h"
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
@@ -37,20 +38,30 @@ bool isHelperCurrent()
 
 std::pair<bool, QString> installHelper(const QString &username)
 {
-    // The install-helper script ships alongside the binary.
-    const QString script = QStandardPaths::locate(
+    Q_UNUSED(username)
+
+    // Search standard data locations first (system/user install).
+    QString script = QStandardPaths::locate(
         QStandardPaths::AppDataLocation,
         QStringLiteral("install-helper.sh"));
+
+    // Fallback: look relative to the application binary.
+    // Works for AppImage (binary lives at $APPDIR/usr/bin/) and portable builds.
+    if (script.isEmpty()) {
+        const QString candidate =
+            QFileInfo(QCoreApplication::applicationDirPath() +
+                      QStringLiteral("/../share/process-lasso-qt/install-helper.sh"))
+            .absoluteFilePath();
+        if (QFile::exists(candidate))
+            script = candidate;
+    }
+
     if (script.isEmpty())
         return {false, QStringLiteral("install-helper.sh not found in data directory.")};
 
-    const QString user = username.isEmpty()
-        ? qEnvironmentVariable("USER")
-        : username;
-
     QProcess p;
     p.start(QStringLiteral("pkexec"),
-            QStringList{QStringLiteral("bash"), script, user});
+            QStringList{QStringLiteral("bash"), script});
     if (!p.waitForFinished(30000))
         return {false, QStringLiteral("pkexec timed out.")};
     if (p.exitCode() == 0)

@@ -2,6 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
+Current version: **1.2.0**.
 
 ---
 
@@ -263,6 +264,53 @@ matching rules, returns QStringList of action descriptions. **Empty return = no 
 The global free function `::detectTopology()` returns `CpuTopology`.
 Inside GamingModeTab, call `m_topo = ::detectTopology()` (not `detectTopology()`) to
 avoid infinite recursion through the method shadowing the free function.
+
+---
+
+## Single-instance enforcement
+
+`main.cpp` uses `QLocalServer`/`QLocalSocket` (Qt6::Network, linked in CMakeLists.txt).
+
+- Socket name: `process-lasso-qt-$USER` (UID fallback for headless environments).
+- On startup, before `QApplication`, a `QLocalSocket` tries to connect with a 300 ms timeout.
+- If connected → running instance found: write `"raise\n"`, flush, exit 0.
+- If not connected → first instance: call `QLocalServer::removeServer()` (clears stale socket from a crash), then `server.listen()`.
+- Server's `newConnection` signal raises the window: `win.show(); win.raise(); win.activateWindow()`.
+- `QLocalServer` is stack-allocated in `main()`, lives for the duration of `app.exec()`.
+
+**Do not** move the single-instance check after `QApplication` construction — the socket probe
+works without a window system connection and avoids flickering a window before exiting.
+
+---
+
+## ProBalance per-process exemptions (v1.2.0)
+
+Two exemption paths are merged in `ProcessMonitor::run()` before each `ProBalance::tick()` call:
+
+### 1. Manual per-PID (Processes tab context menu)
+- Right-click → "Exempt from ProBalance" / "Remove ProBalance Exemption"
+- Calls `ProcessMonitor::setPbExempt(pid, bool)` (locks `m_configMux`).
+- Stored in `m_pbManualExempt` (`QSet<int>`); read back via `pbManualExempt()`.
+- Session-only — not persisted (PIDs are ephemeral).
+- `ProcessTableWidget::updatePbExempt(QSet<int>)` keeps the table in sync; teal row colour + "⚡ PB Exempt" status.
+
+### 2. Rule-based (Rules tab → "ProBalance: Exempt matching processes from ProBalance")
+- `Rule::pbExempt` (`std::optional<bool>`, JSON key `"pb_exempt"`).
+- `RuleEngine::isPbExempt(procName)` — iterates enabled rules with `pbExempt=true`, returns true on first match.
+- Applied by name to every process in the snapshot; converts to PIDs before the tick.
+- Persisted in `config.json` with the rule.
+
+### Merge in run()
+```cpp
+QSet<int> pbExempt;
+{ QMutexLocker lk(&m_configMux); pbExempt = m_pbManualExempt; }
+for (const auto &proc : snapshot)
+    if (m_ruleEngine->isPbExempt(proc.name)) pbExempt.insert(proc.pid);
+m_proBalance->tick(snapshot, tickSec, pbExempt);
+```
+
+`ProBalance::tick()` signature: `void tick(const QList<ProcessInfo>&, double, const QSet<int>& exemptPids = {})`.
+The existing name-pattern exemption (`exempt_patterns` in config) continues to work independently.
 
 ---
 

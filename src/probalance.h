@@ -14,7 +14,8 @@ public:
     void updateConfig(const QJsonObject &cfg);
     void setLogCallback(LogCb cb) { m_logCb = std::move(cb); }
 
-    void tick(const QList<ProcessInfo> &snapshot, double tickSeconds);
+    void tick(const QList<ProcessInfo> &snapshot, double tickSeconds,
+              const QSet<int> &exemptPids = {});
 
     QSet<int> throttledPids() const;
 

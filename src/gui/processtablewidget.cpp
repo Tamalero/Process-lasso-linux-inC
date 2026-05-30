@@ -84,6 +84,11 @@ void ProcessTableWidget::updateThrottled(const QSet<int> &throttled)
     m_throttled = throttled;
 }
 
+void ProcessTableWidget::updatePbExempt(const QSet<int> &exempt)
+{
+    m_pbExempt = exempt;
+}
+
 void ProcessTableWidget::setFilter(const QString &text)
 {
     m_filter = text.trimmed().toLower();
@@ -117,17 +122,22 @@ void ProcessTableWidget::refreshDisplay()
     for (int row = 0; row < sorted.size(); ++row) {
         const auto &proc = sorted[row];
         const bool throttled = m_throttled.contains(proc.pid);
+        const bool pbExempt  = m_pbExempt.contains(proc.pid);
         QColor rowColor;
         if      (throttled)           rowColor = QColor(QStringLiteral("#fab387"));
+        else if (pbExempt)            rowColor = QColor(QStringLiteral("#89dceb"));
         else if (proc.cpuPercent>=80) rowColor = QColor(QStringLiteral("#f38ba8"));
         else if (proc.cpuPercent>=40) rowColor = QColor(QStringLiteral("#f9e2af"));
         else if (proc.cpuPercent>=10) rowColor = QColor(QStringLiteral("#a6e3a1"));
+        QString statusText;
+        if (throttled) statusText = QStringLiteral("⏸ Throttled");
+        else if (pbExempt) statusText = QStringLiteral("⚡ PB Exempt");
         const QStringList items = {
             QString::number(proc.pid), proc.name,
             QStringLiteral("%1").arg(proc.cpuPercent, 0, 'f', 1),
             QStringLiteral("%1").arg(proc.memRss / 1048576.0, 0, 'f', 1),
             QString::number(proc.nice), proc.affinity, proc.ionice,
-            throttled ? QStringLiteral("⏸ Throttled") : QString{}
+            statusText
         };
         for (int col = 0; col < COL_COUNT; ++col) {
             auto *item = new QTableWidgetItem(items[col]);
@@ -197,6 +207,15 @@ void ProcessTableWidget::showContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addAction(QStringLiteral("Add Rule for '%1'…").arg(proc.name),
         [this, proc]{ doAddRule(proc); });
+    menu.addSeparator();
+    const bool alreadyExempt = m_pbExempt.contains(proc.pid);
+    if (alreadyExempt) {
+        menu.addAction(QStringLiteral("Remove ProBalance Exemption for '%1'").arg(proc.name),
+            [this, proc]{ emit pbExemptToggleRequested(proc.pid, false); });
+    } else {
+        menu.addAction(QStringLiteral("Exempt '%1' from ProBalance").arg(proc.name),
+            [this, proc]{ emit pbExemptToggleRequested(proc.pid, true); });
+    }
     menu.exec(viewport()->mapToGlobal(pos));
 }
 

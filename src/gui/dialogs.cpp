@@ -404,7 +404,8 @@ RuleEditDialog::RuleEditDialog(const Rule *existingRule, QWidget *parent)
     connect(m_ioniceCb, &QCheckBox::toggled, m_ioniceClassCombo, &QComboBox::setEnabled);
     connect(m_ioniceCb, &QCheckBox::toggled, m_ioniceLevelSpin,  &QSpinBox::setEnabled);
 
-    m_enabledCb = new QCheckBox(QStringLiteral("Rule enabled"), this);
+    m_pbExemptCb = new QCheckBox(QStringLiteral("Exempt matching processes from ProBalance"), this);
+    m_enabledCb  = new QCheckBox(QStringLiteral("Rule enabled"), this);
     m_enabledCb->setChecked(true);
 
     auto *affRow = new QHBoxLayout;
@@ -425,6 +426,7 @@ RuleEditDialog::RuleEditDialog(const Rule *existingRule, QWidget *parent)
     form->addRow(QStringLiteral("CPU Affinity:"),affRow);
     form->addRow(QStringLiteral("Nice priority:"),niceRow);
     form->addRow(QStringLiteral("I/O priority:"), ioniceRow);
+    form->addRow(QStringLiteral("ProBalance:"),   m_pbExemptCb);
     form->addRow(QStringLiteral(""),              m_enabledCb);
     layout->addLayout(form);
 
@@ -442,6 +444,7 @@ RuleEditDialog::RuleEditDialog(const Rule *existingRule, QWidget *parent)
                 if (IoNiceDialog::CLASSES[i].first == *existingRule->ioniceClass) { m_ioniceClassCombo->setCurrentIndex(i); break; }
             if (existingRule->ioniceLevel) m_ioniceLevelSpin->setValue(*existingRule->ioniceLevel);
         }
+        if (existingRule->pbExempt) m_pbExemptCb->setChecked(*existingRule->pbExempt);
         m_enabledCb->setChecked(existingRule->enabled);
     }
 
@@ -504,6 +507,7 @@ Rule RuleEditDialog::getRule() const
         r.ioniceClass = m_ioniceClassCombo->currentData().toInt();
         r.ioniceLevel = m_ioniceLevelSpin->value();
     }
+    if (m_pbExemptCb->isChecked()) r.pbExempt = true;
     return r;
 }
 

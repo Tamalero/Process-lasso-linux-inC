@@ -14,11 +14,13 @@ public:
 
     void updateSnapshot(const QList<ProcessInfo> &snapshot);
     void updateThrottled(const QSet<int> &throttled);
+    void updatePbExempt(const QSet<int> &exempt);
     void setFilter(const QString &text);
 
 signals:
     void ruleAddRequested(Rule rule);
     void affinityManuallyChanged(int pid);
+    void pbExemptToggleRequested(int pid, bool exempt);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -37,6 +39,7 @@ private:
 
     QList<ProcessInfo> m_snapshot;
     QSet<int>          m_throttled;
+    QSet<int>          m_pbExempt;
     int                m_sortCol  = 2;
     bool               m_sortAsc  = false;
     QString            m_filter;

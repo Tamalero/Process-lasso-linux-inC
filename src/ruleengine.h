@@ -15,6 +15,7 @@ struct Rule {
     std::optional<int>     nice;
     std::optional<int>     ioniceClass;
     std::optional<int>     ioniceLevel;
+    std::optional<bool>    pbExempt;
     bool     enabled    = true;
 
     bool matches(const QString &procName) const;
@@ -39,6 +40,9 @@ public:
 
     // Returns list of action strings for each applied action; empty = no rule matched.
     QStringList applyToProcess(int pid, const QString &procName);
+
+    // Returns true if any enabled rule with pbExempt=true matches procName.
+    bool isPbExempt(const QString &procName) const;
 
 private:
     QList<Rule> m_rules;

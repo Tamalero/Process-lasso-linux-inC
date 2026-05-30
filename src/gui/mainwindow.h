@@ -63,6 +63,7 @@ private:
     void onAffinityManualChange(int pid);
     void onRuleAddFromTable(Rule rule);
     void onPbSettingsChanged(QJsonObject pbCfg);
+    void onPbExemptToggle(int pid, bool exempt);
     void onResetRequested();
     void onGamingModeChanged(bool active, bool elevateNice);
     void onSettingsChanged(QJsonObject updatedConfig);

@@ -90,6 +90,7 @@ private:
     QCheckBox  *m_ioniceCb    = nullptr;
     QComboBox  *m_ioniceClassCombo = nullptr;
     QSpinBox   *m_ioniceLevelSpin  = nullptr;
+    QCheckBox  *m_pbExemptCb  = nullptr;
     QCheckBox  *m_enabledCb   = nullptr;
     void pickAffinity();
     void pickProcess();

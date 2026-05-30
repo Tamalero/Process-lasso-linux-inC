@@ -29,6 +29,7 @@ QJsonObject Rule::toJson() const
     obj[QStringLiteral("nice")]        = nice     ? QJsonValue(*nice)     : QJsonValue::Null;
     obj[QStringLiteral("ionice_class")]= ioniceClass ? QJsonValue(*ioniceClass) : QJsonValue::Null;
     obj[QStringLiteral("ionice_level")]= ioniceLevel ? QJsonValue(*ioniceLevel) : QJsonValue::Null;
+    obj[QStringLiteral("pb_exempt")]   = pbExempt   ? QJsonValue(*pbExempt)    : QJsonValue::Null;
     obj[QStringLiteral("enabled")]     = enabled;
     return obj;
 }
@@ -49,6 +50,8 @@ Rule Rule::fromJson(const QJsonObject &obj)
     if (!ioc.isNull() && ioc.isDouble()) r.ioniceClass = ioc.toInt();
     const auto iol = obj[QStringLiteral("ionice_level")];
     if (!iol.isNull() && iol.isDouble()) r.ioniceLevel = iol.toInt();
+    const auto pbe = obj[QStringLiteral("pb_exempt")];
+    if (!pbe.isNull() && pbe.isBool()) r.pbExempt = pbe.toBool();
     return r;
 }
 
@@ -113,4 +116,11 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
         }
     }
     return actions;
+}
+
+bool RuleEngine::isPbExempt(const QString &procName) const
+{
+    for (const auto &rule : m_rules)
+        if (rule.pbExempt.value_or(false) && rule.matches(procName)) return true;
+    return false;
 }

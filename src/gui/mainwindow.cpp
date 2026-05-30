@@ -141,6 +141,8 @@ void MainWindow::buildUi()
                 this, &MainWindow::onAffinityManualChange);
         connect(m_procTable, &ProcessTableWidget::ruleAddRequested,
                 this, &MainWindow::onRuleAddFromTable);
+        connect(m_procTable, &ProcessTableWidget::pbExemptToggleRequested,
+                this, &MainWindow::onPbExemptToggle);
 
         m_tabs->addTab(w, QStringLiteral("Processes"));
     }
@@ -368,6 +370,7 @@ void MainWindow::onSnapshot(const QList<ProcessInfo> &snapshot)
 {
     m_procTable->updateSnapshot(snapshot);
     m_procTable->updateThrottled(m_proBalance->throttledPids());
+    m_procTable->updatePbExempt(m_monitor->pbManualExempt());
     statusBar()->showMessage(
         QStringLiteral("%1 processes").arg(snapshot.size()));
 }
@@ -407,6 +410,14 @@ void MainWindow::onAffinityManualChange(int pid)
 void MainWindow::onRuleAddFromTable(Rule rule)
 {
     m_rulesEditor->addRuleDirect(rule);
+}
+
+void MainWindow::onPbExemptToggle(int pid, bool exempt)
+{
+    m_monitor->setPbExempt(pid, exempt);
+    appendLog(exempt
+        ? QStringLiteral("[ProBalance] PID %1 manually exempted").arg(pid)
+        : QStringLiteral("[ProBalance] PID %1 exemption removed").arg(pid));
 }
 
 void MainWindow::onPbSettingsChanged(QJsonObject pbCfg)

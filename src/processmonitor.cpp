@@ -136,6 +136,19 @@ void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
     m_manualOverrides[pid] = (double)nowNs() / 1e9 + durationSeconds;
 }
 
+void ProcessMonitor::setPbExempt(int pid, bool exempt)
+{
+    QMutexLocker lk(&m_configMux);
+    if (exempt) m_pbManualExempt.insert(pid);
+    else        m_pbManualExempt.remove(pid);
+}
+
+QSet<int> ProcessMonitor::pbManualExempt() const
+{
+    QMutexLocker lk(&m_configMux);
+    return m_pbManualExempt;
+}
+
 // ── /proc readers ──────────────────────────────────────────────────────────────
 
 bool ProcessMonitor::readProcStat(int pid, long long &utime, long long &stime,
@@ -343,7 +356,15 @@ void ProcessMonitor::run()
             if (now - lastProbal >= 1.0) {
                 const double tickSec = now - lastPbTick;
                 lastPbTick = now;
-                m_proBalance->tick(snapshot, tickSec);
+                // Merge manual per-pid exemptions with rule-based exemptions.
+                QSet<int> pbExempt;
+                {
+                    QMutexLocker lk(&m_configMux);
+                    pbExempt = m_pbManualExempt;
+                }
+                for (const auto &proc : snapshot)
+                    if (m_ruleEngine->isPbExempt(proc.name)) pbExempt.insert(proc.pid);
+                m_proBalance->tick(snapshot, tickSec, pbExempt);
                 lastProbal = now;
             }
 

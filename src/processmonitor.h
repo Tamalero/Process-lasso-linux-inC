@@ -22,6 +22,8 @@ public:
     void resetAllAffinities();
     void setGamingMode(bool active, bool elevateNice);
     void setManualAffinityOverride(int pid, double durationSeconds = 30.0);
+    void setPbExempt(int pid, bool exempt);
+    QSet<int> pbManualExempt() const;
 
 signals:
     void processSnapshotReady(QList<ProcessInfo> snapshot);
@@ -60,7 +62,8 @@ private:
     bool              m_gamingNice      = false;
     QHash<int, int>   m_gamingNiced;     // pid → original nice
 
-    QHash<int, double> m_manualOverrides; // pid → expiry monotonic ms
+    QHash<int, double> m_manualOverrides;  // pid → expiry monotonic s
+    QSet<int>          m_pbManualExempt;   // pids manually exempt from ProBalance
 
     QString defaultAffinity() const;
     void    applyNewPid(const ProcessInfo &info);

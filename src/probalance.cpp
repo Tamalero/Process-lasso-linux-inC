@@ -20,7 +20,8 @@ bool ProBalance::isExempt(const QString &name) const
     return false;
 }
 
-void ProBalance::tick(const QList<ProcessInfo> &snapshot, double tickSeconds)
+void ProBalance::tick(const QList<ProcessInfo> &snapshot, double tickSeconds,
+                      const QSet<int> &exemptPids)
 {
     if (!m_cfg[QStringLiteral("enabled")].toBool(true)) return;
 
@@ -41,7 +42,7 @@ void ProBalance::tick(const QList<ProcessInfo> &snapshot, double tickSeconds)
     }
 
     for (const auto &proc : snapshot) {
-        if (isExempt(proc.name)) continue;
+        if (isExempt(proc.name) || exemptPids.contains(proc.pid)) continue;
 
         if (!m_states.contains(proc.pid))
             m_states[proc.pid] = ProcState{ State::Normal, 0, 0, proc.nice, 0 };

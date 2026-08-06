@@ -44,6 +44,31 @@ static QColor barColor(double pct)
     return QColor(RAMP[5].r, RAMP[5].g, RAMP[5].b);
 }
 
+// Catppuccin-ish ramp for absolute temperatures, shared with the status bar.
+QColor temperatureColor(double celsius)
+{
+    struct Stop { double c; int r, g, b; };
+    static const Stop STOPS[] = {
+        { 40, 137, 180, 250},   // blue   — idle
+        { 60, 166, 227, 161},   // green  — comfortable
+        { 75, 249, 226, 175},   // yellow — warm
+        { 88, 250, 179, 135},   // peach  — hot
+        {100, 243, 139, 168},   // red    — near throttle
+    };
+    constexpr int N = sizeof(STOPS) / sizeof(STOPS[0]);
+    if (celsius <= STOPS[0].c) return QColor(STOPS[0].r, STOPS[0].g, STOPS[0].b);
+    for (int i = 0; i < N - 1; ++i) {
+        if (celsius <= STOPS[i+1].c) {
+            const double t = (celsius - STOPS[i].c) / (STOPS[i+1].c - STOPS[i].c);
+            return QColor(
+                (int)(STOPS[i].r + t*(STOPS[i+1].r - STOPS[i].r)),
+                (int)(STOPS[i].g + t*(STOPS[i+1].g - STOPS[i].g)),
+                (int)(STOPS[i].b + t*(STOPS[i+1].b - STOPS[i].b)));
+        }
+    }
+    return QColor(STOPS[N-1].r, STOPS[N-1].g, STOPS[N-1].b);
+}
+
 // ── CpuBarsWidget ─────────────────────────────────────────────────────────────
 
 CpuBarsWidget::CpuBarsWidget(QWidget *parent) : QWidget(parent)
@@ -53,38 +78,18 @@ CpuBarsWidget::CpuBarsWidget(QWidget *parent) : QWidget(parent)
     setMouseTracking(true);
 }
 
-void CpuBarsWidget::readTemps()
+void CpuBarsWidget::setTemps(const QHash<int,double> &temps)
 {
-    m_temps.clear();
-    const int n = m_pcts.size();
-    const QString hwmonBase = QStringLiteral("/sys/class/hwmon");
-    const QStringList hwmons = QDir(hwmonBase).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const auto &hw : hwmons) {
-        const QString hwPath = hwmonBase + '/' + hw;
-        QFile nf(hwPath + QStringLiteral("/name"));
-        if (!nf.open(QIODevice::ReadOnly)) continue;
-        const QString hwName = QString(nf.readAll()).trimmed();
-        if (hwName != QLatin1String("coretemp") &&
-            hwName != QLatin1String("k10temp") &&
-            hwName != QLatin1String("zenpower")) continue;
-        for (const auto &fname : QDir(hwPath).entryList(QDir::Files)) {
-            if (!fname.startsWith(QLatin1String("temp")) ||
-                !fname.endsWith(QLatin1String("_input"))) continue;
-            const QString labelFile = hwPath + '/' + fname.left(fname.size()-6) + QStringLiteral("_label");
-            QFile lf(labelFile); if (!lf.open(QIODevice::ReadOnly)) continue;
-            const QString label = QString(lf.readAll()).trimmed();
-            if (!label.startsWith(QLatin1String("Core "))) continue;
-            bool ok; int coreId = label.mid(5).toInt(&ok); if (!ok) continue;
-            QFile inf(hwPath + '/' + fname);
-            if (!inf.open(QIODevice::ReadOnly)) continue;
-            double tempC = inf.readAll().trimmed().toDouble() / 1000.0;
-            for (int cpu = 0; cpu < n; ++cpu) {
-                QFile cf(QStringLiteral("/sys/devices/system/cpu/cpu%1/topology/core_id").arg(cpu));
-                if (!cf.open(QIODevice::ReadOnly)) continue;
-                if (cf.readAll().trimmed().toInt() == coreId) m_temps[cpu] = tempC;
-            }
-        }
-    }
+    m_temps = temps;
+    update();
+}
+
+void CpuBarsWidget::setShowTemps(bool show)
+{
+    if (m_showTemps == show) return;
+    m_showTemps = show;
+    if (!show) m_temps.clear();   // monitor stops sending; don't paint stale values
+    update();
 }
 
 void CpuBarsWidget::readFreqs()
@@ -104,7 +109,6 @@ void CpuBarsWidget::updateCpu(const QList<double> &percpu)
          (long long)percpu.size(), width(), height(), (int)isVisible());
     m_pcts = percpu;
     m_offline = getOfflineCpuSet();
-    readTemps();
     readFreqs();
     applyNeededHeight();
     update();
@@ -238,12 +242,21 @@ void CpuBarsWidget::paintEvent(QPaintEvent *)
         // Border
         p.setBrush(Qt::NoBrush); p.setPen(QPen(BORDER, 1));
         p.drawRoundedRect(x, y, barW, barH, 4, 4);
-        // CPU label
+        // CPU label — shifts up to make room for a °C line when one is shown
+        const bool tempLine = m_showTemps && !offline && m_temps.contains(i);
         p.setPen(offline ? OFFLINE_TEXT : ONLINE_TEXT);
         p.setFont(font);
-        p.drawText(x+2, y, labelW-2, barH,
+        p.drawText(x+2, y, labelW-2, tempLine ? barH-10 : barH,
                    Qt::AlignVCenter | Qt::AlignLeft,
                    QStringLiteral("Core %1").arg(i));
+        if (tempLine) {
+            p.setFont(freqFont);
+            p.setPen(temperatureColor(m_temps[i]));
+            p.drawText(x+2, y+barH-11, labelW-2, 11,
+                       Qt::AlignVCenter | Qt::AlignLeft,
+                       QStringLiteral("%1°C").arg(qRound(m_temps[i])));
+            p.setFont(font);
+        }
         // Percentage
         if (offline) {
             p.setPen(OFFLINE_TEXT);

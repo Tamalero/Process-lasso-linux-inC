@@ -1,6 +1,7 @@
 #include "settingstab.h"
 #include "dialogs.h"
 #include "../cputopology.h"
+#include "../sensors.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -70,6 +71,22 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
     m_systemThemeCb = new QCheckBox(QStringLiteral("Follow system theme (dark/light)"), this);
     appForm->addRow(m_systemThemeCb);
 
+    m_showTempsCb = new QCheckBox(
+        QStringLiteral("Show CPU and RAM temperatures"), this);
+    m_showTempsCb->setToolTip(QStringLiteral(
+        "Per-core °C on the CPU bars and a CPU/RAM summary in the status bar.\n"
+        "When off, no hwmon sensors are read at all."));
+    // Probed once here (before the monitor thread starts) so the sensor cache
+    // is never touched concurrently from the GUI thread.
+    if (!Sensors::available()) {
+        m_showTempsCb->setEnabled(false);
+        m_showTempsCb->setToolTip(QStringLiteral(
+            "No supported hwmon temperature sensors found on this system\n"
+            "(expected coretemp / k10temp / zenpower for CPU,\n"
+            "spd5118 / jc42 for memory)."));
+    }
+    appForm->addRow(m_showTempsCb);
+
     auto *opacRow = new QHBoxLayout;
     m_opacitySlider = new QSlider(Qt::Horizontal, this);
     m_opacitySlider->setRange(30, 100);
@@ -87,8 +104,9 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
     auto *appApply = new QPushButton(QStringLiteral("Apply Appearance"), this);
     connect(appApply, &QPushButton::clicked, this, [this]{
         QJsonObject cfg = m_config;
-        cfg[QStringLiteral("system_theme")]   = m_systemThemeCb->isChecked();
-        cfg[QStringLiteral("window_opacity")] = m_opacitySlider->value();
+        cfg[QStringLiteral("system_theme")]      = m_systemThemeCb->isChecked();
+        cfg[QStringLiteral("window_opacity")]    = m_opacitySlider->value();
+        cfg[QStringLiteral("show_temperatures")] = m_showTempsCb->isChecked();
         m_config = cfg;
         emit settingsChanged(cfg);
     });
@@ -127,6 +145,9 @@ void SettingsTab::loadConfig()
     m_displayInterval->setValue(mon[QStringLiteral("display_interval_ms")].toInt(2000));
 
     m_systemThemeCb->setChecked(m_config[QStringLiteral("system_theme")].toBool(false));
+    m_showTempsCb->setChecked(
+        m_showTempsCb->isEnabled() &&
+        m_config[QStringLiteral("show_temperatures")].toBool(true));
     m_opacitySlider->setValue(m_config[QStringLiteral("window_opacity")].toInt(100));
     m_opacityLabel->setText(QString::number(m_opacitySlider->value()) + QStringLiteral("%"));
 

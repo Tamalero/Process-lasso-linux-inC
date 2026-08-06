@@ -210,6 +210,15 @@ void MainWindow::buildUi()
     }
 
     root->addWidget(m_tabs, 1);
+
+    // Temperature readout lives on the right of the status bar as a permanent
+    // widget, so onSnapshot()'s showMessage() never overwrites it.
+    m_tempStatus = new QLabel(this);
+    m_tempStatus->setTextFormat(Qt::RichText);
+    m_tempStatus->setContentsMargins(0, 0, 6, 0);
+    m_tempStatus->hide();
+    statusBar()->addPermanentWidget(m_tempStatus);
+
     statusBar()->showMessage(QStringLiteral("Ready"));
 }
 
@@ -263,8 +272,11 @@ void MainWindow::startMonitor()
                 onCpuForTray(percpu);
                 m_companion->updateCpu(percpu);
             }, Qt::QueuedConnection);
+    connect(m_monitor, &ProcessMonitor::sensorsReady,
+            this, &MainWindow::onSensors, Qt::QueuedConnection);
     connect(m_monitor, &ProcessMonitor::logMessage,
             this, &MainWindow::appendLog, Qt::QueuedConnection);
+    applyTemperatureSetting();
     m_monitor->start();
 }
 
@@ -324,6 +336,20 @@ void MainWindow::applyTheme()
     )"));
     const int opacity = m_config[QStringLiteral("window_opacity")].toInt(100);
     setWindowOpacity(opacity / 100.0);
+}
+
+// ---------- temperature toggle ----------
+
+void MainWindow::applyTemperatureSetting()
+{
+    const bool on = m_config[QStringLiteral("show_temperatures")].toBool(true);
+    m_cpuBars->setShowTemps(on);
+    if (!on) {
+        m_tempStatus->hide();
+        m_tempStatus->clear();
+        m_haveCpuTemp = false;
+    }
+    // When switched on, the next sensorsReady from the monitor shows the label.
 }
 
 // ---------- window toggle / quit ----------
@@ -392,8 +418,47 @@ void MainWindow::onCpuForTray(const QList<double> &percpu)
     for (double v : percpu) sum += v;
     const double avg = sum / percpu.size();
     m_tray->setIcon(makeTrayIcon(avg));
-    m_tray->setToolTip(
-        QStringLiteral("Process Lasso Qt — CPU: %1%").arg(avg, 0, 'f', 1));
+    QString tip = QStringLiteral("Process Lasso Qt — CPU: %1%").arg(avg, 0, 'f', 1);
+    if (m_haveCpuTemp)
+        tip += QStringLiteral(" · %1°C").arg(qRound(m_lastCpuTempC));
+    m_tray->setToolTip(tip);
+}
+
+void MainWindow::onSensors(const SensorSnapshot &sensors)
+{
+    m_cpuBars->setTemps(sensors.perCpu);
+
+    const auto colored = [](double c, const QString &prefix) {
+        return QStringLiteral("%1 <span style='color:%2'>%3°C</span>")
+            .arg(prefix, temperatureColor(c).name(), QString::number(qRound(c)));
+    };
+
+    QStringList parts;
+    double cpuC = 0.0, memC = 0.0;
+    m_haveCpuTemp = sensors.cpuMax(cpuC);
+    if (m_haveCpuTemp) {
+        m_lastCpuTempC = cpuC;
+        parts << colored(cpuC, QStringLiteral("CPU"));
+    }
+    if (sensors.memoryMax(memC))
+        parts << colored(memC, QStringLiteral("RAM"));
+
+    if (parts.isEmpty()) {
+        // Machine exposes no supported sensor — say so once rather than
+        // leaving an empty gap in the status bar.
+        m_tempStatus->setText(QStringLiteral(
+            "<span style='color:#6c7086'>no temperature sensors</span>"));
+    } else {
+        m_tempStatus->setText(parts.join(QStringLiteral(" &nbsp;·&nbsp; ")));
+    }
+    m_tempStatus->show();
+
+    QString tip = QStringLiteral("CPU package: %1")
+        .arg(m_haveCpuTemp ? QStringLiteral("%1 °C").arg(cpuC, 0, 'f', 1)
+                           : QStringLiteral("n/a"));
+    for (const auto &dimm : sensors.memory)
+        tip += QStringLiteral("\n%1: %2 °C").arg(dimm.label).arg(dimm.celsius, 0, 'f', 1);
+    m_tempStatus->setToolTip(tip);
 }
 
 void MainWindow::onRulesChanged()
@@ -448,6 +513,7 @@ void MainWindow::onSettingsChanged(QJsonObject updatedConfig)
     m_monitor->updateConfig(m_config);
     m_settingsTab->updateConfig(m_config);
     applyTheme();
+    applyTemperatureSetting();
     saveConfig();
 }
 

@@ -21,17 +21,18 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
    - [Log](#log-tab)
 8. [System Tray & Companion Panel](#system-tray--companion-panel)
 9. [CPU Usage Graphs](#cpu-usage-graphs)
-10. [Rules Engine Deep Dive](#rules-engine-deep-dive)
-11. [ProBalance Deep Dive](#probalance-deep-dive)
-12. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
-13. [CPU Topology Detection](#cpu-topology-detection)
-14. [How CPU% is Measured](#how-cpu-is-measured)
-15. [Preset Rules](#preset-rules)
-16. [Single-Instance Behaviour](#single-instance-behaviour)
-17. [Keyboard Shortcuts](#keyboard-shortcuts)
-18. [Architecture Notes](#architecture-notes)
-19. [Troubleshooting](#troubleshooting)
-20. [Known Limitations](#known-limitations)
+10. [Temperature Monitoring](#temperature-monitoring)
+11. [Rules Engine Deep Dive](#rules-engine-deep-dive)
+12. [ProBalance Deep Dive](#probalance-deep-dive)
+13. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
+14. [CPU Topology Detection](#cpu-topology-detection)
+15. [How CPU% is Measured](#how-cpu-is-measured)
+16. [Preset Rules](#preset-rules)
+17. [Single-Instance Behaviour](#single-instance-behaviour)
+18. [Keyboard Shortcuts](#keyboard-shortcuts)
+19. [Architecture Notes](#architecture-notes)
+20. [Troubleshooting](#troubleshooting)
+21. [Known Limitations](#known-limitations)
 
 ---
 
@@ -40,6 +41,7 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 | Feature | Description |
 |---|---|
 | CPU usage graphs | "CPU History (avg)" rolling area chart + "Per-Core CPU" bars with GHz frequency overlay |
+| Temperature monitoring | Per-core °C on the CPU bars plus a CPU/RAM status-bar summary; reads DDR5/DDR4 on-DIMM sensors. Toggleable |
 | Live process table | PID, name, CPU%, RSS memory, nice, CPU affinity, I/O class, ProBalance status |
 | Per-process CPU affinity | Topology-aware checkbox picker; `sched_setaffinity` on all TIDs |
 | Per-process nice priority | Full -20 to 19 range |
@@ -50,7 +52,7 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 | Game Launcher | Integrated Steam and Lutris game picker; `/proc`-based game watcher; auto-restore on exit |
 | Gaming Mode profiles | Named profiles saved to config; instant load/switch |
 | Companion Panel | Small always-on-top floating widget: CPU%, show/hide, maximize, gaming toggle, quit |
-| Settings | Default affinity, poll intervals, dark/system theme, window opacity, systemd autostart |
+| Settings | Default affinity, poll intervals, dark/system theme, window opacity, temperature toggle, systemd autostart |
 | System tray | CPU load bar icon; show/hide; gaming mode toggle; companion panel toggle; quit |
 | Single-instance | A second launch raises the existing window instead of opening a duplicate |
 | Dark theme | Catppuccin Mocha colour scheme applied at startup |
@@ -166,6 +168,7 @@ The file is written atomically (write to `.tmp`, then rename) to prevent corrupt
 
 ```json
 {
+  "show_temperatures": true,
   "cpu": {
     "default_affinity": "",
     "gaming_mode": false,
@@ -422,6 +425,7 @@ When enabled, every new PID that does not match any rule receives the configured
 | Control | Default | Description |
 |---|---|---|
 | Follow system theme | Off | When checked, clears the Catppuccin Mocha stylesheet |
+| Show CPU and RAM temperatures | On | Per-core °C on the bars + CPU/RAM status-bar summary. Greyed out if no supported sensor exists. See [Temperature Monitoring](#temperature-monitoring) |
 | Window opacity | 100% | Sets `QMainWindow::setWindowOpacity`; range 30–100% |
 
 #### Autostart
@@ -510,9 +514,47 @@ A grid of per-logical-CPU bars. Each bar shows:
 | Usage bar | Colour-coded fill |
 | Percentage | Right-aligned inside the bar |
 | Frequency | `X.XX GHz` sub-line from `scaling_cur_freq` |
+| Temperature | `NN°C` sub-line under the `Core N` label — see [Temperature Monitoring](#temperature-monitoring) |
 | "off" label | Shown for CPUs taken offline by Gaming Mode |
 
 **Dynamic layout:** Column count adjusts as the window is resized; the widget height grows to fit all bars.
+
+---
+
+## Temperature Monitoring
+
+Controlled by **Settings → Appearance → Show CPU and RAM temperatures** (config key `show_temperatures`, default `true`). When it is off, no hwmon files are read at all — the sweep is skipped entirely rather than just hidden.
+
+### Where readings appear
+
+| Location | Shows |
+|---|---|
+| Per-Core CPU bars | `NN°C` under each `Core N` label, colour-ramped |
+| Status bar (right) | `CPU 93°C · RAM 52°C`; hover for a per-DIMM breakdown |
+| System tray tooltip | CPU temperature appended to the CPU% line |
+
+The orange heat *tint* applied to bar fills above 40 °C predates this feature and is always active, independent of the toggle.
+
+### Supported sensors
+
+Readings come from `/sys/class/hwmon`, matched by driver `name`:
+
+| Driver | Provides | Notes |
+|---|---|---|
+| `coretemp` | Intel CPU package + per-core | `Package id N` and `Core N` labels |
+| `k10temp`, `zenpower`, `zenpower3` | AMD CPU package | `Tdie` preferred, `Tctl` fallback |
+| `spd5118` | DDR5 on-DIMM thermal sensor | One hwmon node per stick |
+| `jc42` | DDR3 / DDR4 on-DIMM thermal sensor | Same handling as `spd5118` |
+
+Both SMT siblings of a physical core report that core's temperature, keyed on `(physical_package_id, core_id)` so ids that repeat across sockets stay distinct.
+
+**AMD note:** `k10temp` and `zenpower` expose no per-core sensor, so on those CPUs only the package temperature appears and the bars carry no `°C` line. This is a driver limitation, not a bug. `Tccd*` per-CCD sensors are not currently surfaced.
+
+**No sensors?** If the machine exposes none of the drivers above, the Settings checkbox is greyed out with an explanatory tooltip and the status bar reads `no temperature sensors`. Missing DIMM sensors are common — many boards and most laptops do not wire them up. If your DDR5 sticks report nothing, check that the `spd5118` module is loaded (`modprobe spd5118`) and that SPD access is not disabled in firmware.
+
+### Cost
+
+Sensor file paths and the CPU topology map are discovered once and cached; rediscovery is triggered only when a cached path disappears (module unloaded, device removed). The sweep runs on the monitor thread at the display refresh interval, never on the GUI thread.
 
 ---
 

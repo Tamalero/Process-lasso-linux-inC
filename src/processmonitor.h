@@ -2,6 +2,7 @@
 #include "processinfo.h"
 #include "ruleengine.h"
 #include "probalance.h"
+#include "sensors.h"
 #include <QThread>
 #include <QMutex>
 #include <QSet>
@@ -28,6 +29,7 @@ public:
 signals:
     void processSnapshotReady(QList<ProcessInfo> snapshot);
     void cpuSnapshotReady(QList<double> percpu);
+    void sensorsReady(SensorSnapshot sensors);
     void logMessage(QString msg);
 
 protected:

@@ -44,6 +44,7 @@ QJsonObject defaultConfig()
 
     QJsonObject root;
     root[QStringLiteral("version")]     = 1;
+    root[QStringLiteral("show_temperatures")] = true;
     root[QStringLiteral("rules")]       = QJsonArray{};
     root[QStringLiteral("cpu")]         = cpu;
     root[QStringLiteral("probalance")]  = probalance;

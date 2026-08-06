@@ -23,6 +23,7 @@ private:
     QSpinBox    *m_ruleInterval   = nullptr;
     QSpinBox    *m_displayInterval = nullptr;
     QCheckBox   *m_systemThemeCb  = nullptr;
+    QCheckBox   *m_showTempsCb    = nullptr;
     QSlider     *m_opacitySlider  = nullptr;
     QLabel      *m_opacityLabel   = nullptr;
     QCheckBox   *m_autostartCb    = nullptr;

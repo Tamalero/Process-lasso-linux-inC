@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(process-lasso-qt VERSION 1.2.0 LANGUAGES CXX)
+project(process-lasso-qt VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,7 @@ set(APP_SOURCES
     src/probalance.cpp
     src/processmonitor.cpp
     src/ruleengine.cpp
+    src/sensors.cpp
     src/utils.cpp
     src/gui/companionwidget.cpp
     src/gui/cpubarwidget.cpp

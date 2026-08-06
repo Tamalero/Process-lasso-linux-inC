@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.2.0**.
+Current version: **1.3.0**.
 
 ---
 
@@ -18,6 +18,7 @@ src/
   ruleengine.{h,cpp}    — match + apply rules to PIDs
   probalance.{h,cpp}    — CPU throttle state machine (not a QObject)
   processmonitor.{h,cpp}— QThread background loop; reads /proc, fires signals
+  sensors.{h,cpp}       — hwmon temperature sweep (CPU package/cores, DIMMs)
   cpupark.{h,cpp}       — park/unpark CPUs via helper binary
   cputopology.{h,cpp}   — detect AMD X3D / Intel Hybrid / Uniform
   utils.{h,cpp}         — affinity, nice, ionice, /proc helpers
@@ -196,6 +197,7 @@ Saved by: `Config::save()` — atomic write (`.tmp` + rename)
 
 ```jsonc
 {
+  "show_temperatures": true,          // top-level; see Temperature monitoring
   "cpu": {
     "default_affinity": "",           // cpulist string, e.g. "0-7"; empty = no default
     "gaming_mode": false,
@@ -311,6 +313,86 @@ m_proBalance->tick(snapshot, tickSec, pbExempt);
 
 `ProBalance::tick()` signature: `void tick(const QList<ProcessInfo>&, double, const QSet<int>& exemptPids = {})`.
 The existing name-pattern exemption (`exempt_patterns` in config) continues to work independently.
+
+---
+
+## Temperature monitoring (v1.3.0)
+
+Toggle: **Settings → Appearance → "Show CPU and RAM temperatures"**, config key
+`show_temperatures` (top-level bool, default `true`).
+
+### src/sensors.{h,cpp}
+
+`Sensors::read()` returns a `SensorSnapshot`:
+
+```cpp
+struct SensorSnapshot {
+    bool                 hasPackage;   // CPU package / Tdie present
+    double               packageC;
+    QHash<int, double>   perCpu;       // logical CPU index → °C
+    QList<SensorReading> memory;       // DIMM label + °C
+    bool cpuMax(double &out) const;    // package, else hottest core
+    bool memoryMax(double &out) const; // hottest DIMM
+};
+```
+
+Recognised hwmon `name` values:
+
+| Driver | Role | Labels consumed |
+|--------|------|-----------------|
+| `coretemp` | Intel CPU | `Package id N`, `Core N` |
+| `k10temp`, `zenpower`, `zenpower3` | AMD CPU | `Tdie` (preferred), `Tctl` |
+| `spd5118` | DDR5 on-DIMM | none — synthesised `DIMM 1`, `DIMM 2`, … |
+| `jc42` | DDR3/DDR4 on-DIMM | none — same synthesis |
+
+`Tccd*` and NVMe `Composite` are deliberately skipped. AMD parts expose no
+per-core sensor, so `perCpu` is empty there and only the package line shows —
+this is expected, not a bug.
+
+**Caching — do not regress.** Sensor file paths are discovered once into a
+static `g_sources` list, and logical-CPU → (package, core_id) into `g_cpuTopo`.
+The pre-1.3.0 code lived in `CpuBarsWidget::readTemps()` and re-opened
+`/sys/devices/system/cpu/cpuN/topology/core_id` for *every* sensor × *every*
+CPU on *every* refresh (~800 file opens per tick on a 14900K), on the **GUI
+thread**. Discovery re-runs automatically only when a cached path fails to open
+(module unloaded / device removed).
+
+Core temperatures are keyed on `(physical_package_id, core_id)`, not `core_id`
+alone — core ids repeat across sockets, and both SMT siblings of a core must map
+to that core's reading.
+
+### Threading
+
+`Sensors::read()` runs on the **monitor thread**, inside the same
+`display_refresh_interval_ms` block that emits `cpuSnapshotReady`, and is skipped
+entirely when `show_temperatures` is false (no hwmon I/O at all when off).
+
+```
+ProcessMonitor::sensorsReady(SensorSnapshot) → MainWindow::onSensors()
+    → CpuBarsWidget::setTemps(perCpu)
+    → m_tempStatus (status-bar permanent widget) rich-text summary
+```
+
+`SettingsTab`'s constructor calls `Sensors::available()` to grey out the
+checkbox on machines with no supported sensor. That is the **only** GUI-thread
+call into `Sensors`, and it happens before `startMonitor()` — keep it that way,
+the caches have no mutex.
+
+### Display
+
+- **Per-core**: `°C` painted under `Core N` in the bar's 52 px label zone
+  (9 px monospace, coloured by `temperatureColor()`), leaving the existing GHz
+  sub-line on the right untouched.
+- **Status bar**: `CPU 93°C · RAM 52°C` as a *permanent* widget, so
+  `onSnapshot()`'s `showMessage("N processes")` cannot overwrite it. Tooltip
+  breaks out each DIMM.
+- **Tray tooltip**: appends `· 93°C` when a CPU temperature is known.
+- The pre-existing orange heat *tint* on the bar fill above 40 °C is unchanged
+  and is **not** gated by the toggle — only the numeric readouts are.
+
+`temperatureColor(double)` (declared in `gui/cpubarwidget.h`) is the shared
+absolute-temperature ramp: blue 40 → green 60 → yellow 75 → peach 88 → red 100.
+Distinct from `barColor(pct)`, which ramps on CPU *load*.
 
 ---
 

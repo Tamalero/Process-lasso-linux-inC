@@ -15,6 +15,7 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QCheckBox>
+#include <QLabel>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -47,18 +48,23 @@ private:
     SettingsTab      *m_settingsTab  = nullptr;
     QTextEdit        *m_logEdit      = nullptr;
     QCheckBox        *m_logAutoScroll = nullptr;
+    QLabel           *m_tempStatus   = nullptr;
+    double            m_lastCpuTempC = 0.0;
+    bool              m_haveCpuTemp  = false;
 
     void buildUi();
     void buildTray();
     void startMonitor();
     void saveConfig();
     void applyTheme();
+    void applyTemperatureSetting();
     void toggleWindow();
     void quitApp();
 
     void onSnapshot(const QList<ProcessInfo> &snapshot);
     void appendLog(const QString &msg);
     void onCpuForTray(const QList<double> &percpu);
+    void onSensors(const SensorSnapshot &sensors);
     void onRulesChanged();
     void onAffinityManualChange(int pid);
     void onRuleAddFromTable(Rule rule);

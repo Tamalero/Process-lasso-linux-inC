@@ -380,6 +380,15 @@ void ProcessMonitor::run()
                 } else {
                     VLOG("monitor: percpu empty — cpuSnapshotReady NOT emitted");
                 }
+                // Temperatures are opt-in: skip the hwmon sweep entirely when off.
+                if (cfg[QStringLiteral("show_temperatures")].toBool(true)) {
+                    const auto sensors = Sensors::read();
+                    VLOG("monitor: sensors pkg=%d (%.1f°C) cores=%lld dimms=%lld",
+                         (int)sensors.hasPackage, sensors.packageC,
+                         (long long)sensors.perCpu.size(),
+                         (long long)sensors.memory.size());
+                    emit sensorsReady(sensors);
+                }
                 lastSnapshot = now;
             }
 

@@ -483,8 +483,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.1.0-x86_64.AppImage  (~67 MB)
-#          process-lasso-qt-1.1.0-x86_64.AppImage.zsync  (~234 KB)
+# Outputs: process-lasso-qt-1.3.0-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.3.0-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -547,6 +547,51 @@ but system `zsyncmake` takes precedence when on `PATH`.
 - FUSE 2 / FUSE 3 compat (`fuse2` on Arch) to mount the squashfs
 - `polkit` (`pkexec`) for the one-time helper installation
 - `sudo` with NOPASSWD for `process-lasso-helper` at runtime
+
+---
+
+## Release procedure
+
+GitHub repo: **`Tamalero/Process-lasso-linux-inC`** (note: the `url=` in
+`packaging/PKGBUILD` still says `acorninteractive/process-lasso-qt` — that is
+wrong and unused by the build). Releases land **directly on `main`**; there is
+no PR flow on this repo.
+
+1. Bump the version in **`CMakeLists.txt`** — `build-appimage.sh` greps it from
+   there, so that single line drives the artifact filenames. Also bump
+   `packaging/PKGBUILD` `pkgver` and the "Current version" line at the top of
+   this file.
+2. Update `README.md` (feature table, config schema, relevant section) and this
+   file. Check the AppImage section above for stale example filenames.
+3. `git commit` on `main`, `git push origin main`.
+4. `bash packaging/build-appimage.sh`
+5. `gh release create vX.Y.Z <AppImage> <AppImage>.zsync --target main --title … --notes …`
+
+**Upload BOTH artifacts.** The `.zsync` is what Gear Lever / AppImageUpdate use
+for delta updates; the embedded update-information glob
+(`process-lasso-qt-*-x86_64.AppImage.zsync`) resolves against the *latest*
+release's assets, so a release missing its `.zsync` silently breaks auto-update
+for everyone.
+
+Verify before publishing:
+```bash
+./process-lasso-qt-X.Y.Z-x86_64.AppImage --appimage-updateinformation
+strings -el AppDir/usr/bin/process-lasso-qt | grep '<a new UI string>'
+```
+`strings` without `-el` will **not** find Qt UI text — `QStringLiteral` stores
+UTF-16, so plain ASCII `strings` finds only `QLatin1String` comparison literals.
+
+### Stale CMake caches (recurring trap)
+
+This project was moved from `Personal/ProcessLasso/` to
+`Personal/Utilities/ProcessLasso/`. Every build directory created before the
+move has the old absolute path baked into `CMakeCache.txt` and fails with
+*"does not match the source … used to generate cache"*.
+
+`build/` is still in that state. `build-appimage/` and `AppDir/` were renamed
+aside as `*.stale-<timestamp>` during the 1.3.0 release and rebuilt clean.
+When you hit this, **rename the directory aside** (never `rm -rf` — see the
+workspace deletion rule) and let CMake regenerate.
 
 ---
 

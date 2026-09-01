@@ -4,6 +4,33 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.3.3
+
+Rolls up 1.3.1 and 1.3.2, which were never published separately. Full history in
+[CHANGELOG.md](CHANGELOG.md).
+
+**Gaming Mode no longer strands your CPUs.** Parked CPUs were never brought back
+when the app exited — `unParkAll()` was reachable only from the Gaming Mode tab,
+so even a clean quit left them offline until you noticed. They are now restored
+on every shutdown Process Lasso can observe, including `SIGTERM` / `SIGINT` /
+`SIGHUP` (systemd stop, logout, Ctrl-C), which previously killed the process
+outright without saving config.
+
+**Crash detection with Safe Mode.** A boot-aware marker records whether the last
+session shut down properly. After 3 unclean starts in a row, rules, default
+affinity and ProBalance stop being applied and a banner offers **Resume Normal**
+— your `config.json` is never modified, only its application is suppressed. The
+marker knows the difference between "crashed just now, CPUs still parked" and
+"crashed, but you have rebooted since and there is nothing left to fix".
+
+**Parking and affinity no longer fight each other.** Original affinities are no
+longer captured while CPUs are parked (which silently narrowed processes for
+good), affinity failures are reported in the Log instead of failing silently,
+and parked CPUs now show in **red** in the affinity picker — still selectable,
+with a warning, since parking is temporary but a rule is permanent.
+
+---
+
 ## Table of Contents
 
 1. [Feature Overview](#feature-overview)
@@ -34,6 +61,7 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 20. [Architecture Notes](#architecture-notes)
 21. [Troubleshooting](#troubleshooting)
 22. [Known Limitations](#known-limitations)
+23. [Changelog](CHANGELOG.md)
 
 ---
 

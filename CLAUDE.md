@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.3.1**.
+Current version: **1.3.2**.
 
 ---
 
@@ -19,6 +19,7 @@ src/
   probalance.{h,cpp}    — CPU throttle state machine (not a QObject)
   processmonitor.{h,cpp}— QThread background loop; reads /proc, fires signals
   sensors.{h,cpp}       — hwmon temperature sweep (CPU package/cores, DIMMs)
+  runstate.{h,cpp}      — unclean-shutdown marker, crash counter, safe mode
   cpupark.{h,cpp}       — park/unpark CPUs via helper binary
   cputopology.{h,cpp}   — detect AMD X3D / Intel Hybrid / Uniform
   utils.{h,cpp}         — affinity, nice, ionice, /proc helpers
@@ -101,6 +102,76 @@ cost is that a CPU offlined by other means is adopted and restored on exit.
 
 Verified 2026-09-01: 4 CPUs offlined externally → app launched → `SIGTERM` →
 all 32 back online. With nothing offline the helper is not invoked at all.
+
+---
+
+## Crash detection / safe mode (v1.3.2)
+
+`src/runstate.{h,cpp}` — marker at `~/.local/state/process-lasso/runstate.json`
+(XDG **state**, not config).
+
+### Two ordering rules, both load-bearing
+
+1. **Re-arm before applying config.** `RunState::beginSession()` runs in the
+   `MainWindow` ctor immediately after `Config::load()` and *before* the monitor
+   starts. Everything between reading the marker and re-arming it is an
+   unprotected window: if applying the config is what kills the process, a
+   marker cleared *afterwards* would still read "clean" and the next run would
+   load the same config again. That is the stale-marker loop this exists to stop.
+2. **Mark clean last.** `RunState::markClean()` is the final act of `quitApp()`,
+   after `restoreParkedCpus()` and `saveConfig()`. Recording "clean" before the
+   hardware is actually released writes a lie the next run will trust.
+
+### boot_id is what makes it correct
+
+`beginSession()` compares the stored boot id against
+`/proc/sys/kernel/random/boot_id`:
+
+- armed + **same** boot → crashed this boot; parked CPUs are stale and real →
+  `MainWindow::recoverFromUncleanShutdown()` unparks them.
+- armed + **different** boot → crashed, but rebooted since. CPU online state is
+  kernel runtime state that a reboot resets, so there is **nothing to repair**.
+
+Without that check the power-loss path runs a pointless "recovery". A missing
+marker is a first run, **not** a crash — do not regress that, or every fresh
+install looks broken.
+
+### Safe mode
+
+3 consecutive unclean starts → `ProcessMonitor::setSafeMode(true)`, gating three
+places: `applyNewPid()` (early return after `captureOriginal`), the
+rule-enforcement block in `run()`, and the ProBalance tick.
+
+**Rules are still loaded into `RuleEngine`** in safe mode. That is deliberate:
+`saveConfig()` does `m_config["rules"] = m_ruleEngine.toJsonArray()`, so *not*
+loading them would silently erase the user's rules on the next save. Safe mode
+suppresses application, never the config itself.
+
+The counter resets only after `HEALTHY_UPTIME_MS` (60 s) of uptime, and **never
+while safe mode is active** — safe mode is sticky until the user presses Resume
+Normal. Both deliberate: a loop that dies after ten seconds would otherwise
+reset the counter every time and never trip the protection.
+
+### Durability
+
+`.tmp` → `fsync(file)` → POSIX `rename()` → `fsync(dir)`. Cesar's `/home` is
+btrfs mounted `commit=120`, so without the fsyncs a write can sit two minutes
+before reaching disk — useless for a marker meant to survive a power cut. POSIX
+`rename()` is used directly rather than `QFile::rename()`, which refuses an
+existing target and would leave a window with no marker at all.
+
+### Verified 2026-09-01
+
+First run not treated as a crash; clean restart holds the counter at 0; three
+SIGKILLs climb 0→1→2 and trip safe mode on the 4th launch; `sameBoot=0` leaves
+parked CPUs alone while `sameBoot=1` unparks them at startup; a probe process
+started with `taskset -c 0-31` is narrowed to the configured `0-15` in normal
+mode and left at `0-31` in safe mode, with `config.json` unchanged.
+
+**Testing note:** on its first scan every existing PID counts as "new", so a
+`default_affinity` in a test config is applied to *every process on the
+machine*, desktop session included. Use a throwaway `HOME` **and** a harmless
+value, and restore with `taskset -acp <full-set> <pid>` afterwards.
 
 ---
 

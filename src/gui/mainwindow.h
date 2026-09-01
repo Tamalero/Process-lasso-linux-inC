@@ -1,5 +1,6 @@
 #pragma once
 #include "../config.h"
+#include "../runstate.h"
 #include "../processmonitor.h"
 #include "../probalance.h"
 #include "../ruleengine.h"
@@ -54,6 +55,9 @@ private:
     QTextEdit        *m_logEdit      = nullptr;
     QCheckBox        *m_logAutoScroll = nullptr;
     QLabel           *m_tempStatus   = nullptr;
+    QWidget          *m_safeBanner   = nullptr;
+    RunStateInfo      m_runState;
+    bool              m_safeMode     = false;
     double            m_lastCpuTempC = 0.0;
     bool              m_haveCpuTemp  = false;
 
@@ -65,6 +69,8 @@ private:
     void applyTemperatureSetting();
     void toggleWindow();
     void restoreParkedCpus();
+    void recoverFromUncleanShutdown();
+    void exitSafeMode();
 
     void onSnapshot(const QList<ProcessInfo> &snapshot);
     void appendLog(const QString &msg);

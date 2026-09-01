@@ -61,7 +61,9 @@ void ProcessMonitor::captureOriginal(int pid)
 
 void ProcessMonitor::applyNewPid(const ProcessInfo &info)
 {
+    // Original affinity is still recorded so Reset All Changes keeps working.
     captureOriginal(info.pid);
+    { QMutexLocker lk(&m_configMux); if (m_safeMode) return; }
     const auto actions = m_ruleEngine->applyToProcess(info.pid, info.name);
     if (!actions.isEmpty()) {
         if (m_gamingMode && m_gamingNice && !m_gamingNiced.contains(info.pid)) {
@@ -134,6 +136,12 @@ void ProcessMonitor::setGamingMode(bool active, bool elevateNice)
 void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
 {
     m_manualOverrides[pid] = (double)nowNs() / 1e9 + durationSeconds;
+}
+
+void ProcessMonitor::setSafeMode(bool on)
+{
+    QMutexLocker lk(&m_configMux);
+    m_safeMode = on;
 }
 
 void ProcessMonitor::setPbExempt(int pid, bool exempt)
@@ -273,6 +281,8 @@ void ProcessMonitor::run()
                 .toObject()[QStringLiteral("rule_enforce_interval_ms")].toDouble(500) / 1000.0;
             const double snapshotInterval = cfg[QStringLiteral("monitor")]
                 .toObject()[QStringLiteral("display_refresh_interval_ms")].toDouble(2000) / 1000.0;
+            bool safeMode;
+            { QMutexLocker lk(&m_configMux); safeMode = m_safeMode; }
 
             // ── Collect snapshot ──────────────────────────────────────────────
             QList<ProcessInfo> newSnapshot;
@@ -339,7 +349,9 @@ void ProcessMonitor::run()
             snapshot = newSnapshot;
 
             // ── Rule enforcement ──────────────────────────────────────────────
-            if (now - lastEnforce >= enforceInterval) {
+            // Safe mode skips this: rules are config, and config is precisely
+            // what is not trusted after repeated unclean shutdowns.
+            if (!safeMode && now - lastEnforce >= enforceInterval) {
                 const double nowD = now;
                 for (auto it = m_manualOverrides.begin(); it != m_manualOverrides.end(); ) {
                     if (it.value() <= nowD) it = m_manualOverrides.erase(it);
@@ -353,7 +365,9 @@ void ProcessMonitor::run()
             }
 
             // ── ProBalance ────────────────────────────────────────────────────
-            if (now - lastProbal >= 1.0) {
+            // Nothing is throttled in safe mode, so there is also nothing to
+            // restore by skipping the tick.
+            if (!safeMode && now - lastProbal >= 1.0) {
                 const double tickSec = now - lastPbTick;
                 lastPbTick = now;
                 // Merge manual per-pid exemptions with rule-based exemptions.

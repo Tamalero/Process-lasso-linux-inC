@@ -1,12 +1,16 @@
 #include "mainwindow.h"
 #include "../config.h"
 #include "../cpupark.h"
+#include "../runstate.h"
+#include <QTimer>
 #include "../verbose.h"
 #include <QAction>
 #include <QJsonArray>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFont>
+#include <QFrame>
+#include <QPushButton>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -42,6 +46,13 @@ MainWindow::MainWindow(QApplication *app, QWidget *parent)
 {
     m_config = Config::load();
 
+    // Consume the previous session's marker and re-arm it for this one. This
+    // has to happen before any config is applied: if applying the config is
+    // what kills us, a marker cleared afterwards would still say "clean" and
+    // the next run would load the same config again — the stale-marker loop.
+    m_runState = RunState::beginSession();
+    m_safeMode = m_runState.safeMode;
+
     m_proBalance = new ProBalance(
         m_config[QStringLiteral("probalance")].toObject(),
         [this](const QString &msg){ appendLog(msg); });
@@ -69,6 +80,21 @@ MainWindow::MainWindow(QApplication *app, QWidget *parent)
     // QWidget has no visibilityChanged signal; install an event filter instead.
     m_companion->installEventFilter(this);
 
+    recoverFromUncleanShutdown();
+
+    if (m_safeMode) {
+        m_monitor->setSafeMode(true);
+        appendLog(QStringLiteral(
+            "[Safe Mode] %1 unclean shutdowns in a row — rules, default affinity "
+            "and ProBalance are NOT being applied.").arg(m_runState.crashCount));
+    } else {
+        // Only a session that survives a while proves its config is safe; a
+        // loop that dies in ten seconds must not keep resetting the counter.
+        QTimer::singleShot(RunState::HEALTHY_UPTIME_MS, this, [this]{
+            if (!m_safeMode) RunState::markHealthy();
+        });
+    }
+
     applyTheme();
     startMonitor();
 
@@ -85,6 +111,7 @@ MainWindow::~MainWindow()
     m_monitor->wait(3000);
     delete m_proBalance;
     saveConfig();
+    RunState::markClean();
 }
 
 // ---------- UI construction ----------
@@ -96,6 +123,28 @@ void MainWindow::buildUi()
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(6, 6, 6, 6);
     root->setSpacing(4);
+
+    // Safe-mode banner — only built when it applies, above everything else.
+    if (m_safeMode) {
+        m_safeBanner = new QFrame(central);
+        m_safeBanner->setStyleSheet(QStringLiteral(
+            "background:#4a1e1e; border:1px solid #f38ba8; border-radius:6px;"));
+        auto *bl = new QHBoxLayout(m_safeBanner);
+        bl->setContentsMargins(10, 6, 10, 6);
+        auto *txt = new QLabel(QStringLiteral(
+            "<b style='color:#f38ba8'>Safe Mode</b>"
+            "<span style='color:#f2cdcd'> — Process Lasso did not shut down cleanly "
+            "%1 times in a row, so rules, default affinity and ProBalance are not "
+            "being applied. Your settings are untouched.</span>")
+            .arg(m_runState.crashCount), m_safeBanner);
+        txt->setTextFormat(Qt::RichText);
+        txt->setWordWrap(true);
+        auto *btn = new QPushButton(QStringLiteral("Resume Normal"), m_safeBanner);
+        connect(btn, &QPushButton::clicked, this, &MainWindow::exitSafeMode);
+        bl->addWidget(txt, 1);
+        bl->addWidget(btn);
+        root->addWidget(m_safeBanner);
+    }
 
     // CPU widgets row — each graph gets a header label in its own column
     auto *cpuRow = new QHBoxLayout;
@@ -390,12 +439,52 @@ void MainWindow::restoreParkedCpus()
     CpuPark::unParkAll([this](const QString &m){ appendLog(m); });
 }
 
+// Repair kernel state a previous crash left behind — but only when that crash
+// happened during the *current* boot. If the machine has rebooted since, every
+// CPU is already back online and there is nothing to undo.
+void MainWindow::recoverFromUncleanShutdown()
+{
+    if (m_runState.previousWasClean) return;
+
+    if (!m_runState.sameBoot) {
+        appendLog(QStringLiteral(
+            "[Recovery] Previous session ended uncleanly, but the machine has "
+            "rebooted since — CPU state was already restored by the reboot."));
+        return;
+    }
+
+    const auto offline = getOfflineCpuSet();
+    if (offline.isEmpty()) {
+        appendLog(QStringLiteral(
+            "[Recovery] Previous session ended uncleanly; no CPUs left parked."));
+        return;
+    }
+
+    appendLog(QStringLiteral(
+        "[Recovery] Previous session crashed during this boot with %1 CPU(s) "
+        "parked — restoring.").arg(offline.size()));
+    CpuPark::unParkAll([this](const QString &m){ appendLog(m); });
+}
+
+void MainWindow::exitSafeMode()
+{
+    m_safeMode = false;
+    m_monitor->setSafeMode(false);
+    if (m_safeBanner) m_safeBanner->hide();
+    RunState::markHealthy();
+    appendLog(QStringLiteral(
+        "[Safe Mode] Cleared — rules, default affinity and ProBalance re-enabled."));
+}
+
 void MainWindow::quitApp()
 {
     restoreParkedCpus();
     saveConfig();
     m_monitor->stop();
     m_monitor->wait(3000);
+    // Last, and only now: everything that had to be released has been.
+    // Recording "clean" any earlier would be a lie the next run would trust.
+    RunState::markClean();
     m_tray->hide();
     m_app->quit();
 }

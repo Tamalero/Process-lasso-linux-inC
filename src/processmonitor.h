@@ -24,6 +24,8 @@ public:
     void setGamingMode(bool active, bool elevateNice);
     void setManualAffinityOverride(int pid, double durationSeconds = 30.0);
     void setPbExempt(int pid, bool exempt);
+    // Observe-only: keep monitoring, stop applying anything config-driven.
+    void setSafeMode(bool on);
     QSet<int> pbManualExempt() const;
 
 signals:
@@ -54,6 +56,7 @@ private:
     QJsonObject   m_config;
     mutable QMutex m_configMux;
     bool          m_stop = false;
+    bool          m_safeMode = false;   // guarded by m_configMux
 
     QSet<int>               m_knownPids;
     QHash<int, QSet<int>>   m_originalAffinities; // pid → original affinity

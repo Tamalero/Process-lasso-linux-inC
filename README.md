@@ -22,17 +22,18 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 8. [System Tray & Companion Panel](#system-tray--companion-panel)
 9. [CPU Usage Graphs](#cpu-usage-graphs)
 10. [Temperature Monitoring](#temperature-monitoring)
-11. [Rules Engine Deep Dive](#rules-engine-deep-dive)
-12. [ProBalance Deep Dive](#probalance-deep-dive)
-13. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
-14. [CPU Topology Detection](#cpu-topology-detection)
-15. [How CPU% is Measured](#how-cpu-is-measured)
-16. [Preset Rules](#preset-rules)
-17. [Single-Instance Behaviour](#single-instance-behaviour)
-18. [Keyboard Shortcuts](#keyboard-shortcuts)
-19. [Architecture Notes](#architecture-notes)
-20. [Troubleshooting](#troubleshooting)
-21. [Known Limitations](#known-limitations)
+11. [Crash Detection & Safe Mode](#crash-detection--safe-mode)
+12. [Rules Engine Deep Dive](#rules-engine-deep-dive)
+13. [ProBalance Deep Dive](#probalance-deep-dive)
+14. [Gaming Mode Deep Dive](#gaming-mode-deep-dive)
+15. [CPU Topology Detection](#cpu-topology-detection)
+16. [How CPU% is Measured](#how-cpu-is-measured)
+17. [Preset Rules](#preset-rules)
+18. [Single-Instance Behaviour](#single-instance-behaviour)
+19. [Keyboard Shortcuts](#keyboard-shortcuts)
+20. [Architecture Notes](#architecture-notes)
+21. [Troubleshooting](#troubleshooting)
+22. [Known Limitations](#known-limitations)
 
 ---
 
@@ -56,6 +57,7 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 | System tray | CPU load bar icon; show/hide; gaming mode toggle; companion panel toggle; quit |
 | Single-instance | A second launch raises the existing window instead of opening a duplicate |
 | Dark theme | Catppuccin Mocha colour scheme applied at startup |
+| Crash detection | Boot-aware unclean-shutdown marker; repairs parked CPUs left by a crash, and stops applying config after repeated crashes |
 | Config persistence | Atomic JSON write to `~/.config/process-lasso-qt/config.json` |
 
 ---
@@ -558,6 +560,45 @@ Sensor file paths and the CPU topology map are discovered once and cached; redis
 
 ---
 
+## Crash Detection & Safe Mode
+
+A marker at `~/.local/state/process-lasso/runstate.json` records that a session
+is in progress. It is armed at startup and cleared only after a **fully
+completed** shutdown, so finding it still armed means the previous run died.
+
+### Why the boot id matters
+
+The marker also stores the kernel's boot id, which separates two cases a plain
+clean/dirty flag conflates:
+
+| Marker | Boot id | Meaning | Action |
+|---|---|---|---|
+| clean / absent | — | Shut down properly (or first ever run) | Resume normally |
+| armed | **matches** | Crashed during **this** boot — parked CPUs are still stale | Unpark them |
+| armed | **differs** | Crashed, but the machine rebooted since | **Nothing to repair** |
+
+That last row is the power-loss case. CPU online state is kernel runtime state
+that a reboot resets on its own, so a flag without the boot id would trigger a
+"recovery" the reboot already performed.
+
+### Safe Mode
+
+Every unclean start increments a counter; a clean shutdown resets it. After
+**3 in a row** the app starts in Safe Mode:
+
+- Rules, default affinity and ProBalance are **not applied**. Monitoring, the
+  process table and everything read-only still work normally.
+- A banner explains why, with a **Resume Normal** button.
+- **Your `config.json` is never modified.** Safe Mode suppresses *application*
+  of the config, not the config itself.
+
+Safe Mode is sticky — it clears only when you press Resume Normal, never on a
+timer. Otherwise a config that crashes the app a minute in would keep resetting
+the counter and never trip the protection. In normal mode the counter resets
+after 60 seconds of uptime, for the same reason.
+
+---
+
 ## Rules Engine Deep Dive
 
 Rules are stored as a JSON array in `config.json`. Each rule has a UUID (`rule_id`), so editing and deleting are stable across reorders.
@@ -743,5 +784,5 @@ Use the Processes tab context menu to exempt a specific running PID instantly, o
 - **CPU% values** are approximate (Linux scheduler jiffies, typically 100 Hz resolution).
 - **ProBalance per-PID exemptions** are session-only. Use a rule for permanent exemption.
 - Config is saved on every rule/settings change and on exit. Parked CPUs are now brought back online on **every** shutdown Process Lasso can observe — tray Quit, window close, and `SIGTERM` / `SIGINT` / `SIGHUP` (systemd stop, logout, Ctrl-C).
-- **`SIGKILL` and power loss cannot be caught**, so those still leave CPUs parked. This self-heals: the next launch notices the offline CPUs, adopts them (the Gaming Mode button shows *Disable Gaming Mode*), and restores them when it next exits. **Reset All Changes** still does it immediately.
+- **`SIGKILL` and power loss cannot be caught.** A `SIGKILL` in the same boot is repaired at the next launch by the crash marker (see [Crash Detection](#crash-detection--safe-mode)); a power loss needs no repair, because the reboot brings every CPU back on its own. **Reset All Changes** still works at any time.
 - Restoring on exit uses the app's own notion of ownership, which counts *any* CPU that was already offline at startup. A CPU you took offline by other means will therefore be brought back online when Process Lasso exits.

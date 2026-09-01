@@ -46,6 +46,33 @@ packaging/
 
 ---
 
+## Branches
+
+`main` is the released line (currently 1.3.0). One feature lives off it:
+
+**`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
+new privileged-helper commands, v1.4.0). Complete, builds clean, and verified
+end-to-end on real hardware. Deliberately kept **off `main`** at Cesar's request
+on 2026-09-01, because motherboard fan control does not currently work on his
+Gigabyte Z690 AORUS PRO — a mainline `it87` limitation, not a bug in this code.
+
+Before doing any fan-related work, read `CLAUDE.md` **on that branch**: it has
+the register-level diagnosis (mainline `it87` never clears the IT8689E
+SmartGuardian bit), the upstream issue/PR references, and the three fixes to try
+in order. That research is not repeated here — do not redo it.
+
+```bash
+git show fan-control:CLAUDE.md | sed -n '/Hardware reality check/,/Qt6-specific/p'
+```
+
+One change on that branch is *not* fan-specific and is worth cherry-picking if
+the topic comes up: `src/main.cpp` gains a SIGTERM/SIGINT/SIGHUP handler (Qt
+socketpair pattern) that routes through `MainWindow::quitApp()`, so a
+signal-terminated process still saves config and unparks CPUs. That addresses
+the "unclean shutdown may leave CPUs parked" limitation in README.md.
+
+---
+
 ## Thread model
 
 ```

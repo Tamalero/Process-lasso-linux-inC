@@ -50,6 +50,17 @@ QString ProcessMonitor::defaultAffinity() const
 void ProcessMonitor::captureOriginal(int pid)
 {
     if (m_originalAffinities.contains(pid)) return;
+
+    // Never snapshot an affinity mask while CPUs are parked. The kernel has
+    // already stripped the offline CPUs out of it, so what we would read is a
+    // truncated mask — and resetAllAffinities() writes captured masks back with
+    // an explicit sched_setaffinity, which the kernel treats as a *new* user
+    // request. That would pin the process off those cores permanently, defeating
+    // the kernel's own restore-on-online behaviour.
+    //
+    // Deferring is safe: an uncaptured pid falls through to the "all CPUs"
+    // branch in resetAllAffinities(), which is what the kernel would do anyway.
+    if (m_cpusParked) return;
     cpu_set_t mask; CPU_ZERO(&mask);
     if (sched_getaffinity(pid, sizeof(mask), &mask) == 0) {
         QSet<int> s;
@@ -75,9 +86,33 @@ void ProcessMonitor::applyNewPid(const ProcessInfo &info)
         }
     } else {
         const QString def = defaultAffinity();
-        if (!def.isEmpty() && Utils::setAffinity(info.pid, def))
+        if (def.isEmpty()) return;
+        if (Utils::setAffinity(info.pid, def)) {
             emitLog(QStringLiteral("[Default] affinity=%1 → %2(%3)")
                 .arg(def, info.name).arg(info.pid));
+            m_defAffinityWarnSig.clear();   // re-arm: warn again if it breaks later
+            return;
+        }
+        // This used to fail silently. Only the parked case reaches the user
+        // log: it is a real, actionable configuration problem and cannot
+        // interleave with success. Every other failure is almost always ESRCH —
+        // the process exited between the snapshot and the syscall — which is
+        // both unactionable and far too common to report.
+        const QSet<int> want    = Utils::cpulistToSet(def);
+        const QSet<int> offline = getOfflineCpuSet();
+        if (want.isEmpty() || !(want - offline).isEmpty()) {
+            VLOG("monitor: default affinity '%s' failed for pid %d (transient)",
+                 qPrintable(def), info.pid);
+            return;
+        }
+        // Deduped on the requested cpulist, re-armed by the success branch.
+        if (def == m_defAffinityWarnSig) return;
+        m_defAffinityWarnSig = def;
+        VLOG("monitor: default affinity '%s' NOT applied — all parked (%s)",
+             qPrintable(def), qPrintable(Utils::cpusetToCpulist(offline)));
+        emitLog(QStringLiteral("[Default] affinity=%1 NOT applied — every one of "
+                               "those CPUs is parked. Unpark them or change the "
+                               "default affinity.").arg(def));
     }
 }
 
@@ -283,6 +318,11 @@ void ProcessMonitor::run()
                 .toObject()[QStringLiteral("display_refresh_interval_ms")].toDouble(2000) / 1000.0;
             bool safeMode;
             { QMutexLocker lk(&m_configMux); safeMode = m_safeMode; }
+            const bool parkedNow = !getOfflineCpuSet().isEmpty();
+            if (parkedNow != m_cpusParked)
+                VLOG("monitor: cpusParked -> %d (original-affinity capture %s)",
+                     (int)parkedNow, parkedNow ? "DEFERRED" : "resumed");
+            m_cpusParked = parkedNow;
 
             // ── Collect snapshot ──────────────────────────────────────────────
             QList<ProcessInfo> newSnapshot;

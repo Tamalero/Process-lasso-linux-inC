@@ -21,6 +21,7 @@ public:
 private:
     int              m_cpuCount = 0;
     QList<QCheckBox*>m_checkboxes;
+    QSet<int>        m_parked;      // offline when the dialog opened
     void selectAll();
     void selectNone();
     void selectSet(const QSet<int> &cpus);

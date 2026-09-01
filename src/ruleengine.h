@@ -1,4 +1,5 @@
 #pragma once
+#include <QHash>
 #include <QList>
 #include <QJsonObject>
 #include <QString>
@@ -47,6 +48,9 @@ public:
 private:
     QList<Rule> m_rules;
     LogCb       m_logCb;
+    // ruleId → signature of the last "affinity not applied" warning, so a
+    // failing rule reports once per parking change instead of every 500 ms.
+    QHash<QString, QString> m_affinityWarned;
 
     void log(const QString &msg);
 };

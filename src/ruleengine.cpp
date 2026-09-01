@@ -1,5 +1,7 @@
 #include "ruleengine.h"
 #include "utils.h"
+#include "cputopology.h"
+#include "verbose.h"
 #include <QJsonArray>
 #include <QRegularExpression>
 
@@ -61,6 +63,7 @@ void RuleEngine::log(const QString &msg) { if (m_logCb) m_logCb(msg); }
 
 void RuleEngine::loadRules(const QJsonArray &arr)
 {
+    m_affinityWarned.clear();
     m_rules.clear();
     for (const auto &v : arr)
         if (v.isObject()) m_rules.append(Rule::fromJson(v.toObject()));
@@ -97,6 +100,33 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 const QString msg = QStringLiteral("[Rule:%1] affinity=%2 → %3(%4)")
                     .arg(rule.name, *rule.affinity, procName).arg(pid);
                 log(msg); actions << msg;
+                m_affinityWarned.remove(rule.ruleId);
+            } else {
+                // This used to fail silently: the log line lived inside the
+                // success branch, so a rule targeting parked CPUs did nothing
+                // and said nothing. sched_setaffinity returns EINVAL when every
+                // requested CPU is offline, which is exactly what Gaming Mode
+                // does. Deduped on (requested, parked) so the enforcement loop
+                // does not repeat it twice a second.
+                const QSet<int> want    = Utils::cpulistToSet(*rule.affinity);
+                const QSet<int> offline = getOfflineCpuSet();
+                // Only the parked case is worth telling the user about: it is
+                // actionable and cannot interleave with success. Anything else
+                // is almost always ESRCH (the process exited between the
+                // snapshot and the syscall) — noise, not a problem.
+                if (want.isEmpty() || !(want - offline).isEmpty()) {
+                    VLOG("rule '%s': affinity '%s' failed for %s (transient)",
+                         qPrintable(rule.name), qPrintable(*rule.affinity),
+                         qPrintable(procName));
+                } else if (m_affinityWarned.value(rule.ruleId) != *rule.affinity) {
+                    m_affinityWarned[rule.ruleId] = *rule.affinity;
+                    VLOG("rule '%s': affinity '%s' NOT applied to %s — all parked (%s)",
+                         qPrintable(rule.name), qPrintable(*rule.affinity),
+                         qPrintable(procName), qPrintable(Utils::cpusetToCpulist(offline)));
+                    log(QStringLiteral("[Rule:%1] affinity=%2 NOT applied to %3 — "
+                                       "every one of those CPUs is parked.")
+                            .arg(rule.name, *rule.affinity, procName));
+                }
             }
         }
         if (rule.nice) {

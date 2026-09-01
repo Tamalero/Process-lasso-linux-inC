@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.3.2**.
+Current version: **1.3.3**.
 
 ---
 
@@ -172,6 +172,80 @@ mode and left at `0-31` in safe mode, with `config.json` unchanged.
 `default_affinity` in a test config is applied to *every process on the
 machine*, desktop session included. Use a throwaway `HOME` **and** a harmless
 value, and restore with `taskset -acp <full-set> <pid>` afterwards.
+
+---
+
+## Parking vs affinity (v1.3.3)
+
+CPU parking and affinity assignment interact badly in two places. Both were
+measured on real hardware, not reasoned about.
+
+### The kernel is fine — the app was not
+
+`sched_setaffinity` stores the *requested* mask and restores it when CPUs come
+back online. Measured: request `24-27` → park all four → kernel forces
+`0-23,28-31` → unpark → **back to `24-27`**. A process with no restriction
+(`0-31`) round-trips the same way.
+
+### 1. captureOriginal() must not run while CPUs are parked
+
+`sched_getaffinity` returns the *already truncated* mask while CPUs are offline.
+Measured: a process whose true original is `0-31` reads back as `0-23,28-31`
+with 24-27 parked. `resetAllAffinities()` then writes captured masks back with
+an explicit `sched_setaffinity` — which the kernel treats as a **new user
+request**, pinning the process off those cores permanently and defeating its own
+restore. `captureOriginal()` now returns early when `m_cpusParked`.
+
+`m_cpusParked` is refreshed **once per monitor loop**, not per PID — the naive
+version re-read `/sys` for every process on the first scan (~400 reads).
+Deferring is safe: an uncaptured pid falls through to the "all CPUs" branch in
+`resetAllAffinities()`, which is what the kernel would do anyway.
+
+### 2. Affinity failures were silent
+
+The success log lived *inside* `if (Utils::setAffinity(...))`, so a rule whose
+CPUs were all parked did nothing and said nothing. Now reported — but **only for
+the parked case**.
+
+That restriction matters. `setAffinity()` also returns false on ESRCH when a
+short-lived process exits between the snapshot and the syscall, which is
+constant and unactionable; an early version logged it 126 times in one run.
+Only "every requested CPU is parked" reaches the user log. Everything else is
+`VLOG` only.
+
+Dedupe is keyed on the **requested cpulist**, not on the parked set, and re-armed
+by the success branch. Keying on the parked set re-fired on every intermediate
+state while CPUs were unparked one at a time — the monitor thread observes that
+in progress (measured: 5 warnings for one unpark of 4 CPUs).
+
+### 3. AffinityDialog shows parked CPUs in red, and warns
+
+Parked CPUs used to be `setEnabled(false)`. They are now **selectable** and
+styled red (`#f38ba8`) with an explanatory tooltip, because parking is transient
+while a rule or default affinity is persistent config that may legitimately be
+authored during Gaming Mode.
+
+`validateAndAccept()` warns on OK when the selection intersects the parked set:
+Save/Cancel (defaulting to Cancel) when *every* selected CPU is parked, Yes/Cancel
+when only some are. Selecting **all** CPUs skips the warning — that is equivalent
+to no restriction at all and is harmless.
+
+### Testing this safely — read before writing a test config
+
+- A `default_affinity` in a test config is applied to **every process on the
+  machine**: on the first scan `m_knownPids` is empty, so every existing PID
+  counts as new. It hit 171 processes once and 140 another time — the whole
+  Plasma session, editors, browsers, Steam. Prefer a **rule** with a narrow
+  pattern; if a default really is needed, restore afterwards with
+  `taskset -acp 0-31 <pid>`.
+- Cesar's own rules pin brave/firefox/"Isolated Web Co" to `16-31` and chromium
+  to `8,16-31` (E-cores on the 14900K: P-cores are 0-15, E-cores 16-31). **Do
+  not "restore" those** — check `~/.config/process-lasso/config.json` before
+  mass-resetting anything.
+- `[ -s /proc/<pid>/cmdline ]` is always false — proc files report size 0, the
+  same gotcha as `QFile::atEnd()` below. A shell scan using it silently matches
+  nothing and looks like a clean result. Read the content and test for emptiness
+  instead.
 
 ---
 

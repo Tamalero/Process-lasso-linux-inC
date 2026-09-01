@@ -599,6 +599,23 @@ after 60 seconds of uptime, for the same reason.
 
 ---
 
+### Parked CPUs in the affinity picker
+
+CPUs parked by Gaming Mode are shown in **red** in the CPU picker, with a tooltip
+explaining they are offline. They remain **selectable** — parking is temporary,
+while a rule or default affinity is saved config you may well be writing while
+Gaming Mode is on.
+
+Pressing OK with parked CPUs selected warns first:
+
+- **All** selected CPUs parked → the affinity cannot take effect at all right
+  now; you are asked to confirm before saving.
+- **Some** selected parked → it applies to the online ones and picks up the rest
+  once they are unparked.
+- Selecting **every** CPU never warns — that is the same as no restriction.
+
+---
+
 ## Rules Engine Deep Dive
 
 Rules are stored as a JSON array in `config.json`. Each rule has a UUID (`rule_id`), so editing and deleting are stable across reorders.
@@ -784,5 +801,6 @@ Use the Processes tab context menu to exempt a specific running PID instantly, o
 - **CPU% values** are approximate (Linux scheduler jiffies, typically 100 Hz resolution).
 - **ProBalance per-PID exemptions** are session-only. Use a rule for permanent exemption.
 - Config is saved on every rule/settings change and on exit. Parked CPUs are now brought back online on **every** shutdown Process Lasso can observe — tray Quit, window close, and `SIGTERM` / `SIGINT` / `SIGHUP` (systemd stop, logout, Ctrl-C).
+- **Parked CPUs and affinity interact.** A rule or default affinity whose CPUs are *all* parked cannot be applied at all — Process Lasso now says so in the Log instead of failing silently. If only some are parked, the affinity applies to the online remainder and widens automatically once they return.
 - **`SIGKILL` and power loss cannot be caught.** A `SIGKILL` in the same boot is repaired at the next launch by the crash marker (see [Crash Detection](#crash-detection--safe-mode)); a power loss needs no repair, because the reboot brings every CPU back on its own. **Reset All Changes** still works at any time.
 - Restoring on exit uses the app's own notion of ownership, which counts *any* CPU that was already offline at startup. A CPU you took offline by other means will therefore be brought back online when Process Lasso exits.

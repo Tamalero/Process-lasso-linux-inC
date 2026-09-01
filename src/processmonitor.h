@@ -57,6 +57,10 @@ private:
     mutable QMutex m_configMux;
     bool          m_stop = false;
     bool          m_safeMode = false;   // guarded by m_configMux
+    // Monitor-thread only: refreshed once per loop so captureOriginal() does
+    // not re-read /sys for every PID.
+    bool          m_cpusParked = false;
+    QString       m_defAffinityWarnSig;   // dedupes the "could not apply" log
 
     QSet<int>               m_knownPids;
     QHash<int, QSet<int>>   m_originalAffinities; // pid → original affinity

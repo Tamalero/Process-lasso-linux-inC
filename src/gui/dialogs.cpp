@@ -23,6 +23,21 @@
 
 // ── AffinityDialog ────────────────────────────────────────────────────────────
 
+
+// Parked CPUs stay *selectable*: parking is transient, and a rule or default
+// affinity is persistent config that may well be authored while Gaming Mode is
+// on. Flag them in red instead, and warn at accept time.
+static void markParked(QCheckBox *cb, int cpu)
+{
+    cb->setStyleSheet(QStringLiteral(
+        "QCheckBox { color: #f38ba8; }"
+        "QCheckBox::indicator:unchecked { border: 1px solid #f38ba8; border-radius: 3px; }"));
+    cb->setToolTip(QStringLiteral(
+        "CPU %1 is currently parked (offline).\n"
+        "It can still be selected — the setting takes effect once it is unparked.")
+        .arg(cpu));
+}
+
 AffinityDialog::AffinityDialog(const QString &currentAffinity,
                                 QWidget *parent,
                                 const QString &titleSuffix)
@@ -36,6 +51,7 @@ AffinityDialog::AffinityDialog(const QString &currentAffinity,
 
     auto *layout = new QVBoxLayout(this);
     const auto offline = getOfflineCpuSet();
+    m_parked = offline;
     const auto topo    = detectTopology();
     const auto smtSibs = getSmtSiblingsOf(topo.preferred | topo.nonPreferred);
 
@@ -74,10 +90,7 @@ AffinityDialog::AffinityDialog(const QString &currentAffinity,
                 int cpu = cpus[col];
                 auto *cb = new QCheckBox(QString::number(cpu));
                 cb->setChecked(selected.contains(cpu));
-                if (offline.contains(cpu)) {
-                    cb->setEnabled(false);
-                    cb->setToolTip(QStringLiteral("CPU %1 is parked").arg(cpu));
-                }
+                if (offline.contains(cpu)) markParked(cb, cpu);
                 grid->addWidget(cb, row, col % 8);
                 cbMap[cpu] = cb;
                 if (col % 8 == 7 && col < cpus.size()-1) ++row;
@@ -98,10 +111,7 @@ AffinityDialog::AffinityDialog(const QString &currentAffinity,
         for (int i = 0; i < m_cpuCount; ++i) {
             auto *cb = new QCheckBox(QString::number(i));
             cb->setChecked(selected.contains(i));
-            if (offline.contains(i)) {
-                cb->setEnabled(false);
-                cb->setToolTip(QStringLiteral("CPU %1 is parked").arg(i));
-            }
+            if (offline.contains(i)) markParked(cb, i);
             grid->addWidget(cb, i/8, i%8);
             cbMap[i] = cb;
         }
@@ -113,8 +123,11 @@ AffinityDialog::AffinityDialog(const QString &currentAffinity,
 
     if (!offline.isEmpty()) {
         auto *note = new QLabel(
-            QStringLiteral("⚠  CPUs %1 are parked (Gaming Mode active).")
+            QStringLiteral("⚠  CPUs <span style='color:#f38ba8'>%1</span> are parked "
+                           "(Gaming Mode active). They can still be selected, but the "
+                           "setting only takes effect once they are unparked.")
                 .arg(Utils::cpusetToCpulist(offline)), this);
+        note->setTextFormat(Qt::RichText);
         note->setStyleSheet(QStringLiteral("color: rgba(249,226,175,0.85); font-size: 11px;"));
         note->setWordWrap(true);
         layout->addWidget(note);
@@ -165,9 +178,46 @@ void AffinityDialog::selectSet(const QSet<int> &cpus)
 }
 void AffinityDialog::validateAndAccept()
 {
-    for (auto *cb : m_checkboxes) if (cb->isChecked()) { accept(); return; }
-    QMessageBox::warning(this, QStringLiteral("Invalid"),
-                         QStringLiteral("At least one CPU must be selected."));
+    QSet<int> sel;
+    for (int i = 0; i < m_checkboxes.size(); ++i)
+        if (m_checkboxes[i]->isChecked()) sel.insert(i);
+
+    if (sel.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Invalid"),
+                             QStringLiteral("At least one CPU must be selected."));
+        return;
+    }
+
+    const QSet<int> chosenParked = sel & m_parked;
+    // Selecting every CPU is the same as no restriction at all, so it is not
+    // worth warning about even while some are parked.
+    const bool selectedEverything = sel.size() == m_cpuCount;
+
+    if (!chosenParked.isEmpty() && !selectedEverything) {
+        const QString parkedList = Utils::cpusetToCpulist(chosenParked);
+        if ((sel - m_parked).isEmpty()) {
+            // Nothing usable at all — sched_setaffinity will return EINVAL.
+            if (QMessageBox::warning(this,
+                    QStringLiteral("All selected CPUs are parked"),
+                    QStringLiteral(
+                        "Every CPU you selected (%1) is currently parked, so this "
+                        "affinity cannot take effect at all right now — it will be "
+                        "ignored until those CPUs are unparked.\n\n"
+                        "Save it anyway?").arg(parkedList),
+                    QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel)
+                != QMessageBox::Save) return;
+        } else {
+            if (QMessageBox::warning(this,
+                    QStringLiteral("Some selected CPUs are parked"),
+                    QStringLiteral(
+                        "CPUs %1 are currently parked. The affinity will apply only "
+                        "to the CPUs that are online until they are unparked.\n\n"
+                        "Continue?").arg(parkedList),
+                    QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes)
+                != QMessageBox::Yes) return;
+        }
+    }
+    accept();
 }
 QString AffinityDialog::getCpulist() const
 {

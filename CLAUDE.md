@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.3.0**.
+Current version: **1.3.1**.
 
 ---
 
@@ -70,6 +70,37 @@ the topic comes up: `src/main.cpp` gains a SIGTERM/SIGINT/SIGHUP handler (Qt
 socketpair pattern) that routes through `MainWindow::quitApp()`, so a
 signal-terminated process still saves config and unparks CPUs. That addresses
 the "unclean shutdown may leave CPUs parked" limitation in README.md.
+
+---
+
+## Shutdown path (v1.3.1)
+
+```
+SIGTERM/SIGINT/SIGHUP ─▶ handler writes 1 byte to a socketpair (async-signal-safe)
+                          └▶ QSocketNotifier on the event loop ─▶ MainWindow::quitApp()
+tray Quit ────────────────────────────────────────────────────▶ MainWindow::quitApp()
+window close (no tray) ───────────────────────────────────────▶ MainWindow::quitApp()
+```
+
+`quitApp()` is a **public slot** so `main.cpp` can reach it; do not move it back
+to private. Never call Qt from inside the signal handler itself — only `write()`.
+
+`quitApp()` calls `restoreParkedCpus()` first. Before this existed, *nothing*
+brought CPUs back at exit — `unParkAll()` was reachable only from the Gaming
+Mode tab — so even a clean quit stranded parked cores. `~MainWindow()` calls it
+again as a backstop; the `getOfflineCpuSet().isEmpty()` check makes it a no-op.
+
+### `isParked()` does not mean "this session parked them"
+
+`GamingModeTab::detectTopology()` sets `m_parked = true` whenever **any** CPU is
+offline at startup, adopting cores stranded by a previous crash and emitting
+`gamingModeChanged(true, …)`. So `isParked()` is the app's *ownership* claim,
+not a record of what it parked. `restoreParkedCpus()` gates on it deliberately:
+that is what makes an unclean shutdown self-heal on the next run. The accepted
+cost is that a CPU offlined by other means is adopted and restored on exit.
+
+Verified 2026-09-01: 4 CPUs offlined externally → app launched → `SIGTERM` →
+all 32 back online. With nothing offline the helper is not invoked at all.
 
 ---
 

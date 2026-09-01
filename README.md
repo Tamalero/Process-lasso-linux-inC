@@ -742,4 +742,6 @@ Use the Processes tab context menu to exempt a specific running PID instantly, o
 - **Uniform CPU topology:** Gaming Mode CPU parking is disabled — no meaningful partition exists.
 - **CPU% values** are approximate (Linux scheduler jiffies, typically 100 Hz resolution).
 - **ProBalance per-PID exemptions** are session-only. Use a rule for permanent exemption.
-- Config is saved on every rule/settings change and on clean exit. An unclean shutdown after a gaming session may leave CPUs parked — run **Reset All Changes** or manually write `1` to each `cpuN/online` sysfs node to recover.
+- Config is saved on every rule/settings change and on exit. Parked CPUs are now brought back online on **every** shutdown Process Lasso can observe — tray Quit, window close, and `SIGTERM` / `SIGINT` / `SIGHUP` (systemd stop, logout, Ctrl-C).
+- **`SIGKILL` and power loss cannot be caught**, so those still leave CPUs parked. This self-heals: the next launch notices the offline CPUs, adopts them (the Gaming Mode button shows *Disable Gaming Mode*), and restores them when it next exits. **Reset All Changes** still does it immediately.
+- Restoring on exit uses the app's own notion of ownership, which counts *any* CPU that was already offline at startup. A CPU you took offline by other means will therefore be brought back online when Process Lasso exits.

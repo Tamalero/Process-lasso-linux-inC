@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include "../config.h"
+#include "../cpupark.h"
+#include "../verbose.h"
 #include <QAction>
 #include <QJsonArray>
 #include <QApplication>
@@ -76,6 +78,9 @@ MainWindow::MainWindow(QApplication *app, QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    // Belt and braces: quitApp() normally handles this, but the window can also
+    // be destroyed without it. Cheap no-op when nothing is offline.
+    restoreParkedCpus();
     m_monitor->stop();
     m_monitor->wait(3000);
     delete m_proBalance;
@@ -361,8 +366,33 @@ void MainWindow::toggleWindow()
     if (m_companion) m_companion->setMainVisible(isVisible());
 }
 
+// Gaming Mode takes CPUs offline, and nothing used to bring them back at exit —
+// so quitting stranded them until the user noticed and ran Reset All Changes.
+//
+// The gate is GamingModeTab::isParked(), which is the app's *own* notion of
+// ownership, not "did this session park them": detectTopology() sets it at
+// startup whenever any CPU is already offline, adopting cores stranded by a
+// previous crash and flipping the button to "Disable Gaming Mode". Restoring on
+// exit is therefore consistent with what the UI already claims, and together
+// with that adoption it self-heals an earlier unclean shutdown.
+//
+// Trade-off, deliberately accepted: a CPU the user took offline by other means
+// is adopted too, and comes back online when Process Lasso exits.
+void MainWindow::restoreParkedCpus()
+{
+    VLOG("restoreParkedCpus: gamingTab=%d parked=%d offline=%lld",
+         (int)(m_gamingTab != nullptr),
+         (int)(m_gamingTab && m_gamingTab->isParked()),
+         (long long)getOfflineCpuSet().size());
+    if (!m_gamingTab || !m_gamingTab->isParked()) return;
+    if (getOfflineCpuSet().isEmpty()) return;
+    appendLog(QStringLiteral("[Shutdown] Unparking CPUs before exit…"));
+    CpuPark::unParkAll([this](const QString &m){ appendLog(m); });
+}
+
 void MainWindow::quitApp()
 {
+    restoreParkedCpus();
     saveConfig();
     m_monitor->stop();
     m_monitor->wait(3000);

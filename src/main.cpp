@@ -4,9 +4,41 @@
 #include <QIcon>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QSocketNotifier>
+#include <csignal>
+#include <sys/socket.h>
 #include <unistd.h>
 
 bool gVerbose = false;
+
+// ── Unix signal → Qt event loop ───────────────────────────────────────────────
+// A SIGTERM (systemd stop, a logout, `timeout`) otherwise kills the process
+// outright, skipping quitApp() — which is where the config is saved and where
+// CPUs parked by Gaming Mode are brought back online. Only write() is called
+// from the handler, which is async-signal-safe; the real work happens on the
+// event loop.
+
+static int gSigFd[2] = { -1, -1 };
+
+static void unixSignalHandler(int)
+{
+    const char byte = 1;
+    const ssize_t ignored = ::write(gSigFd[0], &byte, 1);
+    (void)ignored;
+}
+
+static void installSignalHandlers()
+{
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, gSigFd) != 0) return;
+
+    struct sigaction sa {};
+    sa.sa_handler = unixSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    ::sigaction(SIGTERM, &sa, nullptr);
+    ::sigaction(SIGINT,  &sa, nullptr);
+    ::sigaction(SIGHUP,  &sa, nullptr);
+}
 
 // Per-user socket name so multi-user machines don't collide.
 static QString socketName()
@@ -58,6 +90,18 @@ int main(int argc, char *argv[])
 
     MainWindow win(&app);
     win.show();
+
+    // Drain the signal socketpair on the event loop and shut down cleanly.
+    installSignalHandlers();
+    QSocketNotifier sigNotifier(gSigFd[1], QSocketNotifier::Read);
+    QObject::connect(&sigNotifier, &QSocketNotifier::activated, &win, [&] {
+        sigNotifier.setEnabled(false);
+        char byte = 0;
+        const ssize_t ignored = ::read(gSigFd[1], &byte, 1);
+        (void)ignored;
+        if (gVerbose) fprintf(stderr, "[V] caught termination signal — shutting down\n");
+        win.quitApp();
+    });
 
     // When a second launch connects, show and raise the window.
     QObject::connect(&server, &QLocalServer::newConnection, [&]{

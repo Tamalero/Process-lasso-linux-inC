@@ -23,6 +23,11 @@ public:
     explicit MainWindow(QApplication *app, QWidget *parent = nullptr);
     ~MainWindow() override;
 
+public slots:
+    // Clean shutdown: unparks CPUs, saves config, stops the monitor.
+    // Also reached from the SIGTERM/SIGINT/SIGHUP handler in main.cpp.
+    void quitApp();
+
 protected:
     void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -59,7 +64,7 @@ private:
     void applyTheme();
     void applyTemperatureSetting();
     void toggleWindow();
-    void quitApp();
+    void restoreParkedCpus();
 
     void onSnapshot(const QList<ProcessInfo> &snapshot);
     void appendLog(const QString &msg);

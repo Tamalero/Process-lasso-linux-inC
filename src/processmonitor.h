@@ -29,6 +29,11 @@ public:
     // ProBalance exemptions that last only for this run — same name-pattern
     // matching as the persisted list, but owned by MainWindow, not config.json.
     void setSessionExemptPatterns(const QStringList &patterns);
+    // Force one rule-enforcement pass on the next loop and report the outcome
+    // in the Log. Enforcement already runs every rule_enforce_interval_ms, so
+    // this exists for FEEDBACK — "did my rule actually do anything?" — not to
+    // make it happen more often.
+    void reapplyRulesNow();
     // Observe-only: keep monitoring, stop applying anything config-driven.
     void setSafeMode(bool on);
 
@@ -69,6 +74,7 @@ private:
     // Set by updateConfig(); consumed by run() on the monitor thread, which is
     // the only thread allowed to write ProBalance's config (it has no mutex).
     bool          m_pbConfigDirty = true;  // guarded by m_configMux
+    bool          m_forceEnforce  = false; // guarded by m_configMux
     // Monitor-thread only: refreshed once per loop so captureOriginal() does
     // not re-read /sys for every PID.
     bool          m_cpusParked = false;

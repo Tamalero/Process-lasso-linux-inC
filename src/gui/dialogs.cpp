@@ -545,7 +545,13 @@ void RuleEditDialog::validateAndAccept()
 Rule RuleEditDialog::getRule() const
 {
     Rule r;
-    if (m_rule) r.ruleId = m_rule->ruleId;
+    if (m_rule) {
+        r.ruleId = m_rule->ruleId;
+        // Carry over state the form does not expose. allow_helper is granted
+        // through the escalation prompt, not this dialog — rebuilding the Rule
+        // from the widgets alone silently revoked it on every edit.
+        r.allowHelper = m_rule->allowHelper;
+    }
     r.name      = m_nameEdit->text().trimmed();
     r.pattern   = m_patternEdit->text().trimmed();
     r.matchType = m_matchCombo->currentText();

@@ -2,6 +2,46 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.9] — 2026-09-23
+
+### Fixed — editing a rule could silently throw the change away
+
+If another rule matched the same pattern, editing a rule showed a duplicate
+warning whose options all discarded the edit unless you picked "Add anyway" —
+and "Edit existing rule" redirected you to a *different* rule than the one you
+had open. With two rules for the same application, editing either one reliably
+did nothing.
+
+The edit path now offers **Save change** or **Discard change**, defaults to
+saving, and never redirects you elsewhere.
+
+### Fixed — editing a rule revoked its permission to use the privileged helper
+
+The edit dialog rebuilds the rule from the form, and the helper grant
+(`allow_helper`, added in 1.4.4) is not on the form — so every edit silently
+dropped it, and affinity on processes you do not own quietly stopped working.
+
+### Fixed — priority and I/O priority failures were completely silent
+
+Only affinity reported failures. `setNice()` / `setIoNice()` returning false
+produced no message at all, so a rule that *could not* apply its priority looked
+identical to a rule doing nothing. Failures are now reported once per rule and
+process, with the reason and the owning user.
+
+### Added — "Refresh & Reapply Rules" button in the Rules tab
+
+Redraws the tables from live state, forces a rule pass immediately, and reports
+the outcome in the Log:
+
+```
+[Rules] Re-applied: 3 changes across 2 processes, 1 skipped (manual override)
+[Rules] Re-applied: nothing needed changing across 846 processes.
+```
+
+Note that rules are **already** enforced about twice a second — this does not
+make them apply more often. It exists so you can see what they actually did,
+including anything that could not be applied.
+
 ## [1.4.8] — 2026-09-23
 
 ### Fixed — "Install failed: … install-helper.sh: Permission denied"

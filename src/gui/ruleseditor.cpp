@@ -45,6 +45,19 @@ RulesEditor::RulesEditor(RuleEngine *engine, QWidget *parent)
     makeBtn(QStringLiteral("Export…"),     &RulesEditor::exportRules);
     makeBtn(QStringLiteral("Import…"),     &RulesEditor::importRules);
     btnRow->addStretch();
+    {
+        auto *reapply = new QPushButton(QStringLiteral("Refresh && Reapply Rules"), this);
+        reapply->setToolTip(QStringLiteral(
+            "Redraws the tables from the live state, forces a rule pass "
+            "immediately, and reports the result in the Log.\n\n"
+            "Rules are already enforced automatically about twice a second, so "
+            "this does not make them apply more often — it tells you what they "
+            "actually did, including anything that could not be applied.\n\n"
+            "If pressing this visibly changes what the tables show, something "
+            "was stale that should not have been: please report it."));
+        connect(reapply, &QPushButton::clicked, this, [this]{ emit reapplyRequested(); });
+        btnRow->addWidget(reapply);
+    }
     layout->addLayout(btnRow);
     refresh();
 }
@@ -184,10 +197,31 @@ void RulesEditor::editSelected()
     RuleEditDialog dlg(&(*it), this);
     if (dlg.exec() != QDialog::Accepted) return;
     const Rule edited = dlg.getRule();
-    // Editing a rule's pattern can turn it into a duplicate just as easily as
-    // adding one does.
+    // Editing a rule's pattern can turn it into a duplicate. Warn — but NEVER
+    // throw the edit away, and never offer "edit the existing rule" here: the
+    // user is already editing a specific rule, and silently discarding their
+    // change (or redirecting them to a different rule) is how "editing rules
+    // does nothing" happens. Only an explicit Cancel abandons it.
     if (const Rule *dup = findDuplicate(edited)) {
-        if (!confirmDuplicate(*dup, edited)) return;
+        QStringList clashes;
+        if (dup->affinity    && edited.affinity)    clashes << QStringLiteral("affinity");
+        if (dup->nice        && edited.nice)        clashes << QStringLiteral("priority");
+        if (dup->ioniceClass && edited.ioniceClass) clashes << QStringLiteral("I/O priority");
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(QStringLiteral("Another rule matches the same processes"));
+        box.setText(QStringLiteral("<b>%1</b> also matches <b>%2</b> (%3).")
+                        .arg(dup->name, edited.pattern, edited.matchType));
+        box.setInformativeText(clashes.isEmpty()
+            ? QStringLiteral("Save this change anyway?")
+            : QStringLiteral("Both set <b>%1</b>. Only the first matching rule takes "
+                             "effect for those; the other is shown struck through."
+                             "<br><br>Save this change anyway?").arg(clashes.join(QStringLiteral(" and "))));
+        auto *saveBtn = box.addButton(QStringLiteral("Save change"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("Discard change"), QMessageBox::RejectRole);
+        box.setDefaultButton(saveBtn);
+        box.exec();
+        if (box.clickedButton() != saveBtn) return;
     }
     m_engine->updateRule(edited);
     refresh(); emit rulesChanged();

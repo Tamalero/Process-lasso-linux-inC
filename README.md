@@ -4,6 +4,24 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.9
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Editing a rule works.** If another rule matched the same pattern, editing one
+showed a duplicate warning whose options all discarded your change — so with two
+rules for the same application, editing either reliably did nothing. Editing also
+silently revoked a rule's permission to use the privileged helper.
+
+**Priority and I/O priority failures are no longer silent.** Only affinity
+reported problems; a rule that could not apply its priority looked exactly like a
+rule doing nothing.
+
+**New "Refresh & Reapply Rules" button** in the Rules tab — redraws the tables,
+forces a rule pass, and reports what happened in the Log. Rules are already
+enforced about twice a second, so this is about seeing the result, not making it
+happen sooner.
+
 ## What's New in 1.4.8
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

@@ -198,6 +198,12 @@ void ProcessMonitor::setSessionExemptPatterns(const QStringList &patterns)
     m_pbSessionExempt = patterns;
 }
 
+void ProcessMonitor::reapplyRulesNow()
+{
+    QMutexLocker lk(&m_configMux);
+    m_forceEnforce = true;
+}
+
 void ProcessMonitor::setSafeMode(bool on)
 {
     QMutexLocker lk(&m_configMux);
@@ -403,7 +409,11 @@ void ProcessMonitor::run()
             // ── Rule enforcement ──────────────────────────────────────────────
             // Safe mode skips this: rules are config, and config is precisely
             // what is not trusted after repeated unclean shutdowns.
-            if (!safeMode && now - lastEnforce >= enforceInterval) {
+            bool forced = false;
+            { QMutexLocker lk(&m_configMux); forced = m_forceEnforce; m_forceEnforce = false; }
+            if (forced && safeMode)
+                emitLog(QStringLiteral("[Rules] Not re-applied — Safe Mode is active."));
+            if (!safeMode && (forced || now - lastEnforce >= enforceInterval)) {
                 const double nowD = now;
                 // Prune expired entries and take the live set under the lock,
                 // then release it: applyToProcess() below does syscalls and must
@@ -423,9 +433,27 @@ void ProcessMonitor::run()
                         }
                     }
                 }
+                int matched = 0, acted = 0, skipped = 0;
                 for (const auto &info : snapshot) {
-                    if (overridden.contains(info.pid)) continue;
-                    m_ruleEngine->applyToProcess(info.pid, info.name);
+                    if (overridden.contains(info.pid)) { ++skipped; continue; }
+                    const QStringList actions = m_ruleEngine->applyToProcess(info.pid, info.name);
+                    if (!actions.isEmpty()) { ++matched; acted += actions.size(); }
+                }
+                if (forced) {
+                    // Say plainly when nothing needed doing: "0 changes" is the
+                    // answer to "is this rule working?", not evidence it is not.
+                    emitLog(acted == 0
+                        ? QStringLiteral("[Rules] Re-applied: nothing needed changing "
+                                         "across %1 processes%2.")
+                              .arg(snapshot.size())
+                              .arg(skipped ? QStringLiteral(", %1 skipped (manual override)")
+                                                 .arg(skipped) : QString())
+                        : QStringLiteral("[Rules] Re-applied: %1 change%2 across %3 "
+                                         "process%4%5.")
+                              .arg(acted).arg(acted == 1 ? QString() : QStringLiteral("s"))
+                              .arg(matched).arg(matched == 1 ? QString() : QStringLiteral("es"))
+                              .arg(skipped ? QStringLiteral(", %1 skipped (manual override)")
+                                                 .arg(skipped) : QString()));
                 }
                 lastEnforce = now;
             }

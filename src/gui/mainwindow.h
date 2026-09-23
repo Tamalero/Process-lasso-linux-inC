@@ -53,6 +53,7 @@ private:
     GamingModeTab    *m_gamingTab    = nullptr;
     SettingsTab      *m_settingsTab  = nullptr;
     QTextEdit        *m_logEdit      = nullptr;
+    int               m_logTabIndex  = -1;
     QCheckBox        *m_logAutoScroll = nullptr;
     QLabel           *m_tempStatus   = nullptr;
     QWidget          *m_safeBanner   = nullptr;

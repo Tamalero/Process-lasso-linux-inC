@@ -1,6 +1,7 @@
 #include "ruleengine.h"
 #include "cpupark.h"
 #include <QSet>
+#include <cstring>
 #include "utils.h"
 #include "cputopology.h"
 #include "verbose.h"
@@ -93,6 +94,23 @@ void RuleEngine::updateRule(const Rule &rule)
     for (auto &r : m_rules) {
         if (r.ruleId == rule.ruleId) { r = rule; return; }
     }
+}
+
+// One line per rule+process for a failure that will otherwise repeat on every
+// enforcement pass, twice a second, forever.
+void RuleEngine::warnOnce(const Rule &rule, int pid, const QString &procName,
+                          const QString &what, int err)
+{
+    const QString key = rule.ruleId + QLatin1Char('|') + QString::number(pid)
+                      + QLatin1Char('|') + what;
+    if (m_permWarned.contains(key)) return;
+    if (m_permWarned.size() > 2048) m_permWarned.clear();
+    m_permWarned.insert(key);
+    const QString why = err == EPERM
+        ? Utils::describeAffinityError(EPERM, pid)
+        : QString::fromLocal8Bit(strerror(err ? err : EINVAL));
+    log(QStringLiteral("[Rule:%1] %2 NOT applied to %3(%4) — %5")
+            .arg(rule.name, what, procName).arg(pid).arg(why));
 }
 
 QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
@@ -207,6 +225,11 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4)")
                     .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
                 log(msg); actions << msg;
+            } else {
+                // Previously silent. A rule that cannot apply its priority — a
+                // process owned by someone else, or a negative value beyond
+                // RLIMIT_NICE — looked exactly like a rule doing nothing.
+                warnOnce(rule, pid, procName, QStringLiteral("priority %1").arg(*rule.nice), errno);
             }
         }
         if (rule.ioniceClass && !ioniceDone) {
@@ -220,6 +243,10 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 const QString msg = QStringLiteral("[Rule:%1] ionice class=%2 level=%3 → %4(%5)")
                     .arg(rule.name).arg(*rule.ioniceClass).arg(level).arg(procName).arg(pid);
                 log(msg); actions << msg;
+            } else {
+                warnOnce(rule, pid, procName,
+                         QStringLiteral("I/O priority class %1 level %2")
+                             .arg(*rule.ioniceClass).arg(level), errno);
             }
         }
     }

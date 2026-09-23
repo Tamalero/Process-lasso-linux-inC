@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.8**.
+Current version: **1.4.9**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.8). One feature lives off it:
+`main` is the released line (currently 1.4.9). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -309,6 +309,51 @@ re-reads that one process and repaints immediately after a successful change.
 mechanism. `tests/monitor-harness.cpp` exercises the real override path headlessly and
 passed throughout — that disagreement between a passing test and a user's screen was
 the clue, and it was read as "cannot reproduce" for too long.
+
+---
+
+## Editing a rule must never silently discard the edit (v1.4.9)
+
+Three separate silent failures made *"editing rules does nothing"* a true statement
+from the user's side, while the engine was working correctly the whole time. The
+engine layer is covered by `tests/` and passed throughout — **the GUI layer was the
+bug every time**. Check it first when a change "does not apply".
+
+1. **The duplicate guard discarded edits.** `RulesEditor::editSelected()` ran
+   `findDuplicate()` and, on a hit, offered *Edit existing rule* / *Add anyway* /
+   *Cancel* — two of which `return`ed without calling `updateRule()`. With two
+   `firefox` rules present, editing either one threw the change away, and *Edit
+   existing rule* redirected the user to a **different** rule than the one they
+   opened. Introduced in 1.4.3 by reusing the add-path guard.
+   → The edit path now warns but only ever offers **Save change / Discard change**,
+   defaulting to Save, and never redirects. Reuse of the add-path dialog here is the
+   mistake; keep them separate.
+
+2. **`RuleEditDialog::getRule()` rebuilt the Rule from the form widgets**, so every
+   field *not on the form* was silently dropped — which silently revoked
+   `allowHelper` (added 1.4.4) on every edit. ⚠️ **Any new `Rule` field that is not
+   exposed in the dialog must be copied from `m_rule` in `getRule()`**, or editing a
+   rule quietly erases it.
+
+3. **nice and ionice failures were silent.** Only affinity had a failure branch;
+   `setNice()`/`setIoNice()` returning false produced nothing at all, so a rule that
+   could not apply its priority looked exactly like a rule doing nothing. Now
+   `warnOnce(rule, pid, procName, what, errno)` — deduped per rule+pid+attribute,
+   because these repeat twice a second forever.
+
+### "Refresh & Reapply Rules" button
+
+Rules are **already** enforced every `rule_enforce_interval_ms` (500 ms default), so
+this does not change *when* they apply. It exists for feedback:
+`ProcessMonitor::reapplyRulesNow()` sets a flag, `run()` forces one pass and logs
+`[Rules] Re-applied: N changes across M processes, K skipped (manual override)` —
+including explicitly reporting **"nothing needed changing"**, which is the answer to
+"is my rule working?", not evidence that it is not.
+
+It also resyncs the tables first (`RulesEditor::refresh()`, `refreshPbExemptPatterns()`,
+`updateThrottled()`). That is an escape hatch, **not** a licence for stale views: if
+pressing it visibly changes what is displayed, a refresh path is missing and that is
+the bug to fix.
 
 ---
 
@@ -1050,8 +1095,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.8-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.8-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.9-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.9-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

@@ -82,4 +82,6 @@ private:
     QSet<QString> m_sessionHelper;     // ruleId — allowed for this run only
 
     void log(const QString &msg);
+    void warnOnce(const Rule &rule, int pid, const QString &procName,
+                  const QString &what, int err);
 };

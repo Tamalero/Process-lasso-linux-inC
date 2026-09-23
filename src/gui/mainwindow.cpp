@@ -234,6 +234,22 @@ void MainWindow::buildUi()
     // Tab 1: Rules
     {
         m_rulesEditor = new RulesEditor(&m_ruleEngine, this);
+        connect(m_rulesEditor, &RulesEditor::reapplyRequested, this, [this]{
+            // Resync the display from the live state first. Nothing should be
+            // stale — every mutation path already refreshes — but if something
+            // ever is, this is the escape hatch rather than a restart. It is
+            // NOT a substitute for fixing the staleness: if pressing this
+            // visibly changes the tables, that is a bug worth reporting.
+            m_rulesEditor->refresh();
+            refreshPbExemptPatterns();
+            m_procTable->updateThrottled(m_proBalance->throttledPids());
+
+            m_monitor->reapplyRulesNow();
+            // The result lands in the Log a moment later; showing that tab is
+            // the whole point of the button, otherwise it looks like nothing
+            // happened — which is the complaint it exists to answer.
+            if (m_logTabIndex >= 0) m_tabs->setCurrentIndex(m_logTabIndex);
+        });
         connect(m_rulesEditor, &RulesEditor::rulesChanged,
                 this, &MainWindow::onRulesChanged);
         m_tabs->addTab(m_rulesEditor, QStringLiteral("Rules"));
@@ -290,7 +306,7 @@ void MainWindow::buildUi()
         botRow->addWidget(clearBtn);
         vl->addLayout(botRow);
 
-        m_tabs->addTab(w, QStringLiteral("Log"));
+        m_logTabIndex = m_tabs->addTab(w, QStringLiteral("Log"));
     }
 
     root->addWidget(m_tabs, 1);

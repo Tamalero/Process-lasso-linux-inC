@@ -12,6 +12,7 @@ public:
 
 signals:
     void rulesChanged();
+    void reapplyRequested();
 
 private:
     RuleEngine   *m_engine;

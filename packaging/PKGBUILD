@@ -24,4 +24,5 @@ package() {
     DESTDIR="$pkgdir" cmake --install build
     # Make install-helper script executable
     chmod +x "$pkgdir/usr/share/process-lasso-qt/install-helper.sh"
+    install -Dm755 packaging/uninstall-helper.sh "$pkgdir/usr/share/process-lasso-qt/uninstall-helper.sh"
 }

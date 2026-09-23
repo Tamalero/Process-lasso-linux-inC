@@ -543,6 +543,22 @@ Sudoers entry written by install-helper.sh (**scoped to the installing user** si
 ```
 Existing installs keep the old permissive rule until the helper is reinstalled.
 
+### Uninstalling
+
+`packaging/uninstall-helper.sh` (bash, run via `pkexec`, counterpart to
+install-helper.sh; both are installed to `usr/share/process-lasso-qt/`).
+
+Order is load-bearing: the **sudoers rule goes first**, then `visudo -cqf /etc/sudoers`
+runs and the script **aborts before touching the binary** if the configuration no
+longer parses. A broken file under `/etc/sudoers.d` locks sudo out for everyone, so
+the passwordless grant is removed first and proven safe before anything else happens.
+
+Default is to **move aside** into `/var/backups/process-lasso-uninstall-<timestamp>/`,
+not delete; `--purge` deletes. Idempotent — safe to run when nothing is installed.
+The sudoers file is moved **out of** `/etc/sudoers.d/`, never renamed in place: sudo
+ignores names containing a dot, so a `.bak` left there would be inert but still look
+like live configuration to the next person reading the directory.
+
 `CpuPark::isHelperInstalled()` — checks file exists and is executable  
 `CpuPark::isSudoersInstalled()` — checks `/etc/sudoers.d/process-lasso` exists  
 `CpuPark::installHelper()` — copies via pkexec, writes sudoers

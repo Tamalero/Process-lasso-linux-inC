@@ -77,6 +77,6 @@ install(FILES packaging/process-lasso.desktop
 
 # ── packaging helper script ───────────────────────────────────────────────────
 
-install(PROGRAMS packaging/install-helper.sh
+install(PROGRAMS packaging/install-helper.sh packaging/uninstall-helper.sh
     DESTINATION ${CMAKE_INSTALL_DATADIR}/process-lasso-qt
 )

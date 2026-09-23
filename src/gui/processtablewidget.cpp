@@ -1,6 +1,8 @@
 #include "processtablewidget.h"
 #include "dialogs.h"
+#include "../probalance.h"
 #include "../utils.h"
+#include <QAction>
 #include <QColor>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -84,9 +86,12 @@ void ProcessTableWidget::updateThrottled(const QSet<int> &throttled)
     m_throttled = throttled;
 }
 
-void ProcessTableWidget::updatePbExempt(const QSet<int> &exempt)
+void ProcessTableWidget::setPbExemptPatterns(const QStringList &permanent,
+                                             const QStringList &session)
 {
-    m_pbExempt = exempt;
+    m_pbPermanent = permanent;
+    m_pbSession   = session;
+    refreshDisplay();
 }
 
 void ProcessTableWidget::setFilter(const QString &text)
@@ -121,8 +126,10 @@ void ProcessTableWidget::refreshDisplay()
     setRowCount(sorted.size());
     for (int row = 0; row < sorted.size(); ++row) {
         const auto &proc = sorted[row];
-        const bool throttled = m_throttled.contains(proc.pid);
-        const bool pbExempt  = m_pbExempt.contains(proc.pid);
+        const bool throttled  = m_throttled.contains(proc.pid);
+        const bool permExempt = ProBalance::nameMatchesAny(proc.name, m_pbPermanent);
+        const bool sessExempt = ProBalance::nameMatchesAny(proc.name, m_pbSession);
+        const bool pbExempt   = permExempt || sessExempt;
         QColor rowColor;
         if      (throttled)           rowColor = QColor(QStringLiteral("#fab387"));
         else if (pbExempt)            rowColor = QColor(QStringLiteral("#89dceb"));
@@ -131,7 +138,8 @@ void ProcessTableWidget::refreshDisplay()
         else if (proc.cpuPercent>=10) rowColor = QColor(QStringLiteral("#a6e3a1"));
         QString statusText;
         if (throttled) statusText = QStringLiteral("⏸ Throttled");
-        else if (pbExempt) statusText = QStringLiteral("⚡ PB Exempt");
+        else if (permExempt) statusText = QStringLiteral("⚡ PB Exempt");
+        else if (sessExempt) statusText = QStringLiteral("⚡ PB Exempt (session)");
         const QStringList items = {
             QString::number(proc.pid), proc.name,
             QStringLiteral("%1").arg(proc.cpuPercent, 0, 'f', 1),
@@ -208,14 +216,31 @@ void ProcessTableWidget::showContextMenu(const QPoint &pos)
     menu.addAction(QStringLiteral("Add Rule for '%1'…").arg(proc.name),
         [this, proc]{ doAddRule(proc); });
     menu.addSeparator();
-    const bool alreadyExempt = m_pbExempt.contains(proc.pid);
-    if (alreadyExempt) {
-        menu.addAction(QStringLiteral("Remove ProBalance Exemption for '%1'").arg(proc.name),
-            [this, proc]{ emit pbExemptToggleRequested(proc.pid, false); });
-    } else {
-        menu.addAction(QStringLiteral("Exempt '%1' from ProBalance").arg(proc.name),
-            [this, proc]{ emit pbExemptToggleRequested(proc.pid, true); });
-    }
+    // Name-based, not pid-based: an exemption is a name pattern, so it covers
+    // every process of that name. Two independent lifetimes, shown as two
+    // checkable items so the current state is visible rather than inferred from
+    // which verb the menu happens to be offering.
+    auto *pbMenu = menu.addMenu(QStringLiteral("ProBalance exemption for '%1'").arg(proc.name));
+
+    auto *sessionAct = pbMenu->addAction(QStringLiteral("This session only"));
+    sessionAct->setCheckable(true);
+    const bool sessOn = ProBalance::nameMatchesAny(proc.name, m_pbSession);
+    sessionAct->setChecked(sessOn);
+    sessionAct->setToolTip(QStringLiteral(
+        "Exempt until Process Lasso Qt exits. Not written to config.json."));
+    connect(sessionAct, &QAction::triggered, this,
+        [this, name = proc.name, sessOn]{ emit pbExemptSessionToggled(name, !sessOn); });
+
+    auto *permAct = pbMenu->addAction(QStringLiteral("Permanent (saved to config)"));
+    permAct->setCheckable(true);
+    const bool permOn = ProBalance::nameMatchesAny(proc.name, m_pbPermanent);
+    permAct->setChecked(permOn);
+    permAct->setToolTip(QStringLiteral(
+        "Adds the name to the ProBalance tab's exempt list and saves it."));
+    connect(permAct, &QAction::triggered, this,
+        [this, name = proc.name, permOn]{ emit pbExemptPermanentToggled(name, !permOn); });
+
+    pbMenu->setToolTipsVisible(true);
     menu.exec(viewport()->mapToGlobal(pos));
 }
 

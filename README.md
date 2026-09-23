@@ -4,10 +4,34 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.0
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**"Exempt from ProBalance" actually works now.** Right-clicking a process and
+exempting it used to set a session-only, per-PID flag: nothing saved it, it never
+showed up in the ProBalance tab's exempt list, and it covered one PID — so
+exempting `firefox` left its dozen child processes throttleable, and the whole
+thing vanished on the next launch. Exemptions are now by **name**, and a process
+that was already throttled when you exempt it gets its original priority back
+instead of being stranded at the throttled value for good.
+
+**Two exemption scopes, as checkable ticks.** The context menu now offers
+**This session only** (gone when the app exits, never written to `config.json`)
+and **Permanent** (saved to the ProBalance tab's list) independently. Both show
+their current state, so whether something is exempt — and for how long — is
+visible rather than guessed. Session-exempt processes show `⚡ PB Exempt (session)`.
+
+**A warning about generic patterns.** Exempt patterns match anywhere in a process
+name, so a short entry like `sh` quietly covers `bash`, `sshd` and `plasmashell`,
+and ProBalance stops throttling with nothing in the Log to explain why. The
+ProBalance tab now says so.
+
+---
+
 ## What's New in 1.3.3
 
-Rolls up 1.3.1 and 1.3.2, which were never published separately. Full history in
-[CHANGELOG.md](CHANGELOG.md).
+Rolled up 1.3.1 and 1.3.2, which were never published separately.
 
 **Gaming Mode no longer strands your CPUs.** Parked CPUs were never brought back
 when the app exited — `unParkAll()` was reachable only from the Gaming Mode tab,
@@ -262,7 +286,7 @@ The main live view of all running processes.
 | Nice | Current nice priority | -20 (highest) to 19 (lowest) |
 | Affinity | Active CPU affinity mask | Displayed as cpulist, e.g. `0-7,16-23` |
 | I/O | I/O priority class | e.g. `be/4` (best-effort, level 4) |
-| Status | Process state | `⏸ Throttled` (ProBalance active) or `⚡ PB Exempt` (ProBalance bypassed) |
+| Status | Process state | `⏸ Throttled` (ProBalance active), `⚡ PB Exempt` (permanently exempt) or `⚡ PB Exempt (session)` |
 
 **Sorting:** Click any column header to sort ascending; click again for descending. The active sort column shows a ▲ or ▼ indicator.
 
@@ -293,14 +317,22 @@ The main live view of all running processes.
 | Set Priority (nice) for *name*… | Opens NicePriorityDialog |
 | Set I/O Priority for *name*… | Opens IoNiceDialog |
 | Add Rule for '*name*'… | Opens RuleEditDialog pre-filled with process name |
-| Exempt '*name*' from ProBalance | Prevents ProBalance from throttling this PID (session only) |
-| Remove ProBalance Exemption for '*name*' | Re-enables ProBalance throttling for this PID |
+| ProBalance exemption for '*name*' ▸ | Submenu with two independent, checkable scopes (see note below) |
+| &nbsp;&nbsp;↳ This session only | Exempt until the app exits. **Not** written to `config.json` |
+| &nbsp;&nbsp;↳ Permanent (saved to config) | Adds the name to the ProBalance tab's **Exempt Processes** list and saves it |
 
 **Keyboard shortcut:** `Delete` or `Backspace` on a selected row sends SIGTERM to the selected process(es).
 
 **Manual affinity protection:** When you manually change a process's affinity from the context menu, the monitor suppresses rule re-enforcement for that PID for 30 seconds, so your manual change is not immediately overwritten.
 
-**ProBalance exemption note:** Per-PID exemptions set from the context menu are session-only — they are not saved to `config.json` because PIDs change across process restarts. To make an exemption permanent, add a rule with the *Exempt from ProBalance* checkbox ticked (see [Rules Tab](#rules-tab)).
+**ProBalance exemption note:** Both scopes exempt by **name**, not by PID — so exempting `firefox` covers all of its child processes, not just the one you right-clicked. The two ticks are independent and show the current state, so you can see at a glance whether a process is exempt and for how long.
+
+- **This session only** — for "stop throttling this while I render/compile/play", without leaving anything behind. Gone when the app exits; never written to `config.json`.
+- **Permanent** — writes the name into `probalance.exempt_patterns`, the same list shown in the [ProBalance tab](#probalance-tab). It appears there immediately and is saved.
+
+Because both lists match on *contains*, unticking a scope removes **every** pattern in it that matches the process — which may include a broader pattern you added by hand (unticking `firefox` would also drop a `fire` entry). That is deliberate: removing only the exact name would leave the process exempt while the tick said otherwise.
+
+For an exemption that depends on more than a name, use a rule with the *Exempt from ProBalance* checkbox ticked (see [Rules Tab](#rules-tab)).
 
 ---
 
@@ -369,13 +401,25 @@ Automatic CPU throttling that prevents one runaway process from starving the res
 
 Click **Apply Settings** to save and propagate changes to the running monitor.
 
+> ⚠️ **Keep exempt patterns specific.** Each entry matches **anywhere** in a process
+> name, case-insensitively. A short or generic pattern exempts far more than you mean
+> it to: `sh` also covers `bash`, `sshd` and `plasmashell`; `e` would exempt very
+> nearly every process on the machine. The failure is silent — ProBalance simply
+> stops throttling anything, with nothing in the Log to say why. If ProBalance looks
+> dead, check this list first. Prefer whole executable names.
+>
+> The same reach applies in reverse: unticking an exemption in the Processes tab
+> removes **every** pattern matching that process, so a generic entry can disappear
+> because you unexempted one unrelated program that happened to match it.
+
 **Exemption summary:**
 
 | Method | Scope | Persistent |
 |---|---|---|
 | Exempt Patterns list (this tab) | By name substring — matches any process whose name contains the pattern | Yes (saved in config) |
 | Rules tab → ProBalance checkbox | By name — matches any process the rule matches | Yes (saved with rule) |
-| Processes tab context menu | By PID — applies to the currently running instance only | No (session only) |
+| Processes tab context menu → Permanent | Writes into the Exempt Patterns list above — same as adding it by hand | Yes (saved in config) |
+| Processes tab context menu → This session only | By name substring, same matching — but held in memory only | No (gone on exit) |
 
 Throttled processes show orange in the Processes tab with `⏸ Throttled`.
 Exempt processes show teal with `⚡ PB Exempt`.
@@ -678,12 +722,15 @@ Throttled ──[ CPU < restore_threshold for M seconds ]──▶  Normal
                                                           (nice restored)
 ```
 
-**Exemption priority (highest to lowest):**
-1. Name-pattern exemption (`exempt_patterns` in ProBalance config) — checked by ProBalance itself
-2. Rule-based exemption (`pb_exempt: true` on a matching rule) — resolved by `RuleEngine::isPbExempt(name)` before tick
-3. Manual per-PID exemption (context menu) — stored in `ProcessMonitor::m_pbManualExempt`
+**Exemption paths** — all three match by name, using the same case-insensitive
+"contains" rule:
+1. Permanent name patterns (`exempt_patterns` in ProBalance config) — checked by ProBalance itself. Written by the ProBalance tab's list and by the context menu's *Permanent* tick.
+2. Session name patterns — held in memory for this run only, written by the context menu's *This session only* tick.
+3. Rule-based exemption (`pb_exempt: true` on a matching rule) — resolved by `RuleEngine::isPbExempt(name)` before the tick.
 
-All three are honoured; a process matching any exemption path is never throttled.
+All three are honoured; a process matching any one is never throttled. A process that
+becomes exempt **while it is throttled** has its original nice value restored on the
+next tick — it is not left stranded at the throttled value.
 
 ---
 

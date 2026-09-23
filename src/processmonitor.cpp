@@ -37,7 +37,10 @@ void ProcessMonitor::updateConfig(const QJsonObject &cfg)
 {
     QMutexLocker lk(&m_configMux);
     m_config = cfg;
-    m_proBalance->updateConfig(cfg[QStringLiteral("probalance")].toObject());
+    // Do NOT push this into ProBalance from here: updateConfig() is called from
+    // the GUI thread, ProBalance has no mutex, and run() reads its config while
+    // ticking. run() picks the change up on the monitor thread instead.
+    m_pbConfigDirty = true;
 }
 
 QString ProcessMonitor::defaultAffinity() const
@@ -173,23 +176,16 @@ void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
     m_manualOverrides[pid] = (double)nowNs() / 1e9 + durationSeconds;
 }
 
+void ProcessMonitor::setSessionExemptPatterns(const QStringList &patterns)
+{
+    QMutexLocker lk(&m_configMux);
+    m_pbSessionExempt = patterns;
+}
+
 void ProcessMonitor::setSafeMode(bool on)
 {
     QMutexLocker lk(&m_configMux);
     m_safeMode = on;
-}
-
-void ProcessMonitor::setPbExempt(int pid, bool exempt)
-{
-    QMutexLocker lk(&m_configMux);
-    if (exempt) m_pbManualExempt.insert(pid);
-    else        m_pbManualExempt.remove(pid);
-}
-
-QSet<int> ProcessMonitor::pbManualExempt() const
-{
-    QMutexLocker lk(&m_configMux);
-    return m_pbManualExempt;
 }
 
 // ── /proc readers ──────────────────────────────────────────────────────────────
@@ -405,19 +401,38 @@ void ProcessMonitor::run()
             }
 
             // ── ProBalance ────────────────────────────────────────────────────
+            // Hand over any pending config change here, on the monitor thread:
+            // ProBalance has no mutex and tick() reads its config directly.
+            // This runs even in safe mode so the config never goes stale.
+            {
+                QJsonObject pendingPb;
+                bool havePending = false;
+                {
+                    QMutexLocker lk(&m_configMux);
+                    if (m_pbConfigDirty) {
+                        pendingPb   = m_config[QStringLiteral("probalance")].toObject();
+                        havePending = true;
+                        m_pbConfigDirty = false;
+                    }
+                }
+                if (havePending) m_proBalance->updateConfig(pendingPb);
+            }
             // Nothing is throttled in safe mode, so there is also nothing to
             // restore by skipping the tick.
             if (!safeMode && now - lastProbal >= 1.0) {
                 const double tickSec = now - lastPbTick;
                 lastPbTick = now;
-                // Merge manual per-pid exemptions with rule-based exemptions.
+                // Rule-based and session exemptions match by name; convert them
+                // to pids here. The persisted name patterns are handled inside
+                // tick() itself, from ProBalance's own config.
+                QStringList sessionPats;
+                { QMutexLocker lk(&m_configMux); sessionPats = m_pbSessionExempt; }
                 QSet<int> pbExempt;
-                {
-                    QMutexLocker lk(&m_configMux);
-                    pbExempt = m_pbManualExempt;
+                for (const auto &proc : snapshot) {
+                    if (m_ruleEngine->isPbExempt(proc.name)
+                     || ProBalance::nameMatchesAny(proc.name, sessionPats))
+                        pbExempt.insert(proc.pid);
                 }
-                for (const auto &proc : snapshot)
-                    if (m_ruleEngine->isPbExempt(proc.name)) pbExempt.insert(proc.pid);
                 m_proBalance->tick(snapshot, tickSec, pbExempt);
                 lastProbal = now;
             }

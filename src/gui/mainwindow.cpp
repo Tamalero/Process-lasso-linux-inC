@@ -22,6 +22,7 @@
 #include <QStatusBar>
 #include <QTime>
 #include <QVBoxLayout>
+#include <utility>   // std::as_const
 
 // ---------- helpers ----------
 
@@ -61,6 +62,10 @@ MainWindow::MainWindow(QApplication *app, QWidget *parent)
 
     buildUi();
     buildTray();
+
+    // Seed the table's exempt state from config before the first snapshot lands,
+    // or the first refresh paints every process as un-exempt.
+    refreshPbExemptPatterns();
 
     m_companion = new CompanionWidget(this);
     connect(m_companion, &CompanionWidget::showHideRequested, this, [this]{
@@ -195,8 +200,10 @@ void MainWindow::buildUi()
                 this, &MainWindow::onAffinityManualChange);
         connect(m_procTable, &ProcessTableWidget::ruleAddRequested,
                 this, &MainWindow::onRuleAddFromTable);
-        connect(m_procTable, &ProcessTableWidget::pbExemptToggleRequested,
-                this, &MainWindow::onPbExemptToggle);
+        connect(m_procTable, &ProcessTableWidget::pbExemptPermanentToggled,
+                this, &MainWindow::onPbExemptPermanentToggle);
+        connect(m_procTable, &ProcessTableWidget::pbExemptSessionToggled,
+                this, &MainWindow::onPbExemptSessionToggle);
 
         m_tabs->addTab(w, QStringLiteral("Processes"));
     }
@@ -513,9 +520,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::onSnapshot(const QList<ProcessInfo> &snapshot)
 {
-    m_procTable->updateSnapshot(snapshot);
+    // updateThrottled() must come *before* updateSnapshot(), which is what
+    // repaints the rows — setting it after left the Status column one whole
+    // refresh behind. (The exempt patterns are pushed on change, not per frame.)
     m_procTable->updateThrottled(m_proBalance->throttledPids());
-    m_procTable->updatePbExempt(m_monitor->pbManualExempt());
+    m_procTable->updateSnapshot(snapshot);
     statusBar()->showMessage(
         QStringLiteral("%1 processes").arg(snapshot.size()));
 }
@@ -596,18 +605,65 @@ void MainWindow::onRuleAddFromTable(Rule rule)
     m_rulesEditor->addRuleDirect(rule);
 }
 
-void MainWindow::onPbExemptToggle(int pid, bool exempt)
+QStringList MainWindow::pbExemptPatterns() const
 {
-    m_monitor->setPbExempt(pid, exempt);
+    QStringList out;
+    const auto arr = m_config[QStringLiteral("probalance")].toObject()
+                        [QStringLiteral("exempt_patterns")].toArray();
+    for (const auto &v : arr) out << v.toString();
+    return out;
+}
+
+void MainWindow::refreshPbExemptPatterns()
+{
+    m_procTable->setPbExemptPatterns(pbExemptPatterns(), m_pbSessionExempt);
+    m_monitor->setSessionExemptPatterns(m_pbSessionExempt);
+}
+
+void MainWindow::onPbExemptPermanentToggle(const QString &name, bool exempt)
+{
+    if (name.isEmpty()) return;
+
+    QStringList patterns = pbExemptPatterns();
+    QStringList dropped;
+    if (!ProBalance::toggleExemptPattern(patterns, name, exempt, dropped)) return;
+
     appendLog(exempt
-        ? QStringLiteral("[ProBalance] PID %1 manually exempted").arg(pid)
-        : QStringLiteral("[ProBalance] PID %1 exemption removed").arg(pid));
+        ? QStringLiteral("[ProBalance] '%1' permanently exempt (saved to config)").arg(name)
+        : QStringLiteral("[ProBalance] '%1' no longer permanently exempt (removed: %2)")
+              .arg(name, dropped.join(QStringLiteral(", "))));
+
+    QJsonObject pb = m_config[QStringLiteral("probalance")].toObject();
+    pb[QStringLiteral("exempt_patterns")] = QJsonArray::fromStringList(patterns);
+    m_config[QStringLiteral("probalance")] = pb;
+    m_pbTab->setExemptPatterns(patterns);
+    m_monitor->updateConfig(m_config);
+    refreshPbExemptPatterns();
+    saveConfig();
+}
+
+void MainWindow::onPbExemptSessionToggle(const QString &name, bool exempt)
+{
+    if (name.isEmpty()) return;
+
+    QStringList dropped;
+    if (!ProBalance::toggleExemptPattern(m_pbSessionExempt, name, exempt, dropped)) return;
+
+    appendLog(exempt
+        ? QStringLiteral("[ProBalance] '%1' exempt for this session only").arg(name)
+        : QStringLiteral("[ProBalance] '%1' session exemption removed (%2)")
+              .arg(name, dropped.join(QStringLiteral(", "))));
+
+    // Never touches m_config: this list must not survive into config.json.
+    refreshPbExemptPatterns();
 }
 
 void MainWindow::onPbSettingsChanged(QJsonObject pbCfg)
 {
     m_config[QStringLiteral("probalance")] = pbCfg;
-    m_proBalance->updateConfig(pbCfg);
+    // Via the monitor, never straight into m_proBalance — see the thread model.
+    m_monitor->updateConfig(m_config);
+    refreshPbExemptPatterns();
     saveConfig();
 }
 

@@ -2,6 +2,58 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.0] — 2026-09-23
+
+### Added — session-only vs. permanent ProBalance exemptions
+
+The Processes tab context menu now has a **ProBalance exemption for '*name*'**
+submenu with two independent, checkable scopes:
+
+- **This session only** — exempt until the app exits, never written to
+  `config.json`. For "stop throttling this while I render / compile / play"
+  without leaving anything behind.
+- **Permanent (saved to config)** — adds the name to the ProBalance tab's
+  **Exempt Processes** list and saves it.
+
+Both tick boxes show the current state, so whether a process is exempt — and for
+how long — is visible rather than inferred. Both exempt by **name**, so
+exempting `firefox` covers its child processes too. Session-exempt processes show
+`⚡ PB Exempt (session)` in the Status column.
+
+The ProBalance tab now warns that exempt patterns match **anywhere** in a
+process name: a short or generic entry (`sh`, or worse `e`) exempts most of the
+machine, and the failure is silent — ProBalance just stops throttling anything.
+
+### Fixed — "Exempt from ProBalance" did nothing visible
+
+Right-clicking a process and choosing **Exempt 'X' from ProBalance** used to set a
+session-only, per-PID flag. Nothing persisted it, it never appeared in the ProBalance
+tab's exempt list, and it covered only that one PID — so a browser's other processes
+stayed throttleable and the whole thing was gone on the next launch.
+
+- The menu now writes the process name into the ProBalance tab's **Exempt Processes**
+  list (`probalance.exempt_patterns`). It shows up in the tab immediately, is saved to
+  `config.json`, covers every process of that name, and survives a restart.
+- **Remove ProBalance Exemption** drops every pattern that matches the process, not
+  just an exact-name entry — the list matches on "contains", so removing only the
+  exact name could leave the process exempt while the menu said it was not.
+- A process exempted **while it was throttled** is now un-niced. Previously ProBalance
+  just stopped looking at it, stranding it at the throttled nice value for the life of
+  the process — the most direct reason exempting appeared to do nothing.
+- The **Status** column no longer lags a refresh behind; the teal "⚡ PB Exempt" marker
+  now also reflects the tab's pattern list, not just the vanished per-PID set.
+- ProBalance config changes are handed to the monitor thread instead of being written
+  into ProBalance from the GUI thread while it ticks.
+
+### Internal
+
+- The exempt-list matching rule (case-insensitive substring) had been
+  reimplemented in four files. It is now `ProBalance::nameMatches()` /
+  `nameMatchesAny()` / `toggleExemptPattern()`, used by all of them.
+- New `tests/probalance-harness.cpp`: 29 standalone checks over the ProBalance
+  state machine and the exempt-list rules, with `Utils::setNice()` stubbed.
+  Not part of the CMake build; the `g++` line is in its header comment.
+
 ## [1.3.3] — 2026-09-01
 
 Rolls up 1.3.1 and 1.3.2, which were never published separately. Everything

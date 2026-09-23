@@ -58,6 +58,9 @@ private:
     QWidget          *m_safeBanner   = nullptr;
     RunStateInfo      m_runState;
     bool              m_safeMode     = false;
+    // Session-only ProBalance exemptions: deliberately not in m_config, so
+    // saveConfig() cannot leak them into config.json.
+    QStringList       m_pbSessionExempt;
     double            m_lastCpuTempC = 0.0;
     bool              m_haveCpuTemp  = false;
 
@@ -80,7 +83,14 @@ private:
     void onAffinityManualChange(int pid);
     void onRuleAddFromTable(Rule rule);
     void onPbSettingsChanged(QJsonObject pbCfg);
-    void onPbExemptToggle(int pid, bool exempt);
+    void onPbExemptPermanentToggle(const QString &name, bool exempt);
+    void onPbExemptSessionToggle(const QString &name, bool exempt);
+    // Patterns from config["probalance"]["exempt_patterns"], read on the GUI
+    // thread only — never through ProBalance, which belongs to the monitor.
+    QStringList pbExemptPatterns() const;
+    // Pushes both lists to the table (display + menu ticks) and the session list
+    // to the monitor. Call after anything that changes either list.
+    void refreshPbExemptPatterns();
     void onResetRequested();
     void onGamingModeChanged(bool active, bool elevateNice);
     void onSettingsChanged(QJsonObject updatedConfig);

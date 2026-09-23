@@ -14,13 +14,20 @@ public:
 
     void updateSnapshot(const QList<ProcessInfo> &snapshot);
     void updateThrottled(const QSet<int> &throttled);
-    void updatePbExempt(const QSet<int> &exempt);
+    // The two ProBalance exempt lists, as name patterns (case-insensitive
+    // "contains", same rule ProBalance itself applies). The widget matches them
+    // itself so the row colour, the Status column and the context-menu ticks all
+    // agree with each other by construction.
+    void setPbExemptPatterns(const QStringList &permanent, const QStringList &session);
     void setFilter(const QString &text);
 
 signals:
     void ruleAddRequested(Rule rule);
     void affinityManuallyChanged(int pid);
-    void pbExemptToggleRequested(int pid, bool exempt);
+    // Separate signals rather than one with a scope flag: the two exemptions have
+    // different lifetimes and different owners (config file vs. this run).
+    void pbExemptPermanentToggled(QString name, bool exempt);
+    void pbExemptSessionToggled(QString name, bool exempt);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -39,7 +46,8 @@ private:
 
     QList<ProcessInfo> m_snapshot;
     QSet<int>          m_throttled;
-    QSet<int>          m_pbExempt;
+    QStringList        m_pbPermanent;
+    QStringList        m_pbSession;
     int                m_sortCol  = 2;
     bool               m_sortAsc  = false;
     QString            m_filter;

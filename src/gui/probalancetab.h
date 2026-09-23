@@ -12,6 +12,9 @@ class ProBalanceTab : public QWidget {
 public:
     explicit ProBalanceTab(const QJsonObject &cfg, QWidget *parent = nullptr);
     QJsonObject getConfig() const;
+    // Repopulates the exempt list from outside the tab (the Processes tab's
+    // "Exempt from ProBalance" context menu writes the same config key).
+    void setExemptPatterns(const QStringList &patterns);
 
 signals:
     void settingsChanged(QJsonObject cfg);

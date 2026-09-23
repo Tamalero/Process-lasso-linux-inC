@@ -11,12 +11,47 @@ void ProBalance::updateConfig(const QJsonObject &cfg) { m_cfg = cfg; }
 
 void ProBalance::log(const QString &msg) { if (m_logCb) m_logCb(msg); }
 
+bool ProBalance::nameMatches(const QString &name, const QString &pattern)
+{
+    // An empty pattern would be a substring of everything — an empty row in the
+    // exempt list must not exempt the entire machine.
+    if (pattern.isEmpty()) return false;
+    return name.contains(pattern, Qt::CaseInsensitive);
+}
+
+bool ProBalance::nameMatchesAny(const QString &name, const QStringList &patterns)
+{
+    for (const auto &pat : patterns)
+        if (nameMatches(name, pat)) return true;
+    return false;
+}
+
+bool ProBalance::toggleExemptPattern(QStringList &patterns, const QString &name,
+                                     bool exempt, QStringList &removed)
+{
+    if (name.isEmpty()) return false;
+
+    if (exempt) {
+        if (nameMatchesAny(name, patterns)) return false;  // already covered
+        patterns << name;
+        return true;
+    }
+
+    QStringList kept;
+    for (const auto &pat : patterns) {
+        if (nameMatches(name, pat)) removed << pat;
+        else                        kept    << pat;
+    }
+    if (removed.isEmpty()) return false;
+    patterns = kept;
+    return true;
+}
+
 bool ProBalance::isExempt(const QString &name) const
 {
     const auto patterns = m_cfg[QStringLiteral("exempt_patterns")].toArray();
-    const QString lower = name.toLower();
     for (const auto &v : patterns)
-        if (lower.contains(v.toString().toLower())) return true;
+        if (nameMatches(name, v.toString())) return true;
     return false;
 }
 
@@ -42,7 +77,27 @@ void ProBalance::tick(const QList<ProcessInfo> &snapshot, double tickSeconds,
     }
 
     for (const auto &proc : snapshot) {
-        if (isExempt(proc.name) || exemptPids.contains(proc.pid)) continue;
+        if (isExempt(proc.name) || exemptPids.contains(proc.pid)) {
+            // A process can become exempt *while* it is throttled. Just dropping
+            // it out of the loop would strand it at the throttled nice value
+            // forever — which is exactly what "exempting it did nothing" looks
+            // like from the Processes tab. Undo the throttle first, then forget
+            // the process entirely.
+            auto it = m_states.find(proc.pid);
+            if (it != m_states.end()) {
+                if (it->state == State::Throttled) {
+                    if (Utils::setNice(proc.pid, it->originalNice))
+                        log(QStringLiteral("[ProBalance] RESTORE %1(%2) now exempt, nice %3→%4")
+                            .arg(proc.name).arg(proc.pid)
+                            .arg(proc.nice).arg(it->originalNice));
+                    else
+                        log(QStringLiteral("[ProBalance] %1(%2) is exempt but nice %3 could not be restored")
+                            .arg(proc.name).arg(proc.pid).arg(proc.nice));
+                }
+                m_states.erase(it);
+            }
+            continue;
+        }
 
         if (!m_states.contains(proc.pid))
             m_states[proc.pid] = ProcState{ State::Normal, 0, 0, proc.nice, 0 };

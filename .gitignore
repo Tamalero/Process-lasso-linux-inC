@@ -11,3 +11,6 @@ AppDir/
 *.AppImage
 *.AppImage.zsync
 packaging/appimage-tools/
+
+# harness binaries built by hand from tests/
+tests/probalance-harness

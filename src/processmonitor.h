@@ -23,10 +23,11 @@ public:
     void resetAllAffinities();
     void setGamingMode(bool active, bool elevateNice);
     void setManualAffinityOverride(int pid, double durationSeconds = 30.0);
-    void setPbExempt(int pid, bool exempt);
+    // ProBalance exemptions that last only for this run — same name-pattern
+    // matching as the persisted list, but owned by MainWindow, not config.json.
+    void setSessionExemptPatterns(const QStringList &patterns);
     // Observe-only: keep monitoring, stop applying anything config-driven.
     void setSafeMode(bool on);
-    QSet<int> pbManualExempt() const;
 
 signals:
     void processSnapshotReady(QList<ProcessInfo> snapshot);
@@ -57,6 +58,9 @@ private:
     mutable QMutex m_configMux;
     bool          m_stop = false;
     bool          m_safeMode = false;   // guarded by m_configMux
+    // Set by updateConfig(); consumed by run() on the monitor thread, which is
+    // the only thread allowed to write ProBalance's config (it has no mutex).
+    bool          m_pbConfigDirty = true;  // guarded by m_configMux
     // Monitor-thread only: refreshed once per loop so captureOriginal() does
     // not re-read /sys for every PID.
     bool          m_cpusParked = false;
@@ -72,7 +76,7 @@ private:
     QHash<int, int>   m_gamingNiced;     // pid → original nice
 
     QHash<int, double> m_manualOverrides;  // pid → expiry monotonic s
-    QSet<int>          m_pbManualExempt;   // pids manually exempt from ProBalance
+    QStringList        m_pbSessionExempt;  // guarded by m_configMux
 
     QString defaultAffinity() const;
     void    applyNewPid(const ProcessInfo &info);

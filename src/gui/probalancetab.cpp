@@ -3,6 +3,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonArray>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -47,6 +48,23 @@ ProBalanceTab::ProBalanceTab(const QJsonObject &cfg, QWidget *parent)
 
     auto *exemptGroup = new QGroupBox(QStringLiteral("Exempt Processes (pattern contains)"), this);
     auto *exLayout = new QVBoxLayout(exemptGroup);
+
+    // Substring matching is the whole point of this list, but it is also its
+    // sharp edge: one short pattern can silently exempt most of the machine,
+    // and the only symptom is ProBalance quietly never throttling anything.
+    auto *exWarn = new QLabel(QStringLiteral(
+        "⚠  Each pattern matches <b>anywhere</b> in a process name, and is "
+        "case-insensitive. A short or generic pattern exempts far more than you "
+        "mean it to — <span style='color:#f38ba8'>sh</span> also covers "
+        "<i>bash</i>, <i>sshd</i>, <i>plasmashell</i>…, and "
+        "<span style='color:#f38ba8'>e</span> would exempt almost every process "
+        "on the machine. ProBalance then throttles nothing, with no error to "
+        "tell you why. Prefer whole executable names."), exemptGroup);
+    exWarn->setTextFormat(Qt::RichText);
+    exWarn->setStyleSheet(QStringLiteral("color: rgba(249,226,175,0.85); font-size: 11px;"));
+    exWarn->setWordWrap(true);
+    exLayout->addWidget(exWarn);
+
     m_exemptList = new QListWidget(this);
     for (const auto &v : cfg[QStringLiteral("exempt_patterns")].toArray())
         m_exemptList->addItem(v.toString());
@@ -66,6 +84,12 @@ ProBalanceTab::ProBalanceTab(const QJsonObject &cfg, QWidget *parent)
     connect(applyBtn, &QPushButton::clicked, this, &ProBalanceTab::apply);
     layout->addWidget(applyBtn);
     layout->addStretch();
+}
+
+void ProBalanceTab::setExemptPatterns(const QStringList &patterns)
+{
+    m_exemptList->clear();
+    m_exemptList->addItems(patterns);
 }
 
 void ProBalanceTab::addExempt()

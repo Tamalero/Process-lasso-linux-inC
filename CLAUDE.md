@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.3.3**.
+Current version: **1.4.0**.
 
 ---
 
@@ -35,6 +35,8 @@ src/
     settingstab.{h,cpp} — default affinity, intervals, theme, autostart
     dialogs.{h,cpp}     — RuleDialog, AffinityDialog, NiceDialog,
                           SteamGamePickerDialog, LutrisGamePickerDialog
+tests/
+  probalance-harness.cpp— standalone ProBalance checks; not in the CMake build
 helper/
   main.cpp              — privileged C binary (no Qt), commands below
 packaging/
@@ -49,10 +51,12 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.3.0). One feature lives off it:
+`main` is the released line (currently 1.4.0). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
-new privileged-helper commands, v1.4.0). Complete, builds clean, and verified
+new privileged-helper commands). ⚠️ That branch's own docs still call itself
+**v1.4.0**, which `main` took on 2026-09-23 — renumber it to 1.5.0 when/if it
+ships. Complete, builds clean, and verified
 end-to-end on real hardware. Deliberately kept **off `main`** at Cesar's request
 on 2026-09-01, because motherboard fan control does not currently work on his
 Gigabyte Z690 AORUS PRO — a mainline `it87` limitation, not a bug in this code.
@@ -488,34 +492,106 @@ works without a window system connection and avoids flickering a window before e
 
 ---
 
-## ProBalance per-process exemptions (v1.2.0)
+## ProBalance exemptions (v1.2.0, reworked 2026-09-23)
 
-Two exemption paths are merged in `ProcessMonitor::run()` before each `ProBalance::tick()` call:
+**Everything matches by NAME, never by PID**, using one shared rule: a pattern is a
+case-insensitive *substring* of the process name. That rule lives in exactly one
+place — `ProBalance::nameMatches()` / `nameMatchesAny()` (public statics). It was
+reimplemented in four files once; do not do that again.
 
-### 1. Manual per-PID (Processes tab context menu)
-- Right-click → "Exempt from ProBalance" / "Remove ProBalance Exemption"
-- Calls `ProcessMonitor::setPbExempt(pid, bool)` (locks `m_configMux`).
-- Stored in `m_pbManualExempt` (`QSet<int>`); read back via `pbManualExempt()`.
-- Session-only — not persisted (PIDs are ephemeral).
-- `ProcessTableWidget::updatePbExempt(QSet<int>)` keeps the table in sync; teal row colour + "⚡ PB Exempt" status.
+`ProBalance::toggleExemptPattern(QStringList&, name, exempt, removed)` is the shared
+add/remove: **adding** is a no-op when an existing pattern already covers the name;
+**removing** drops *every* pattern matching the name, because the pattern covering a
+process need not be its exact name — dropping only an exact-name entry would leave a
+broader pattern in place, keeping the process exempt while the UI unticked itself.
 
-### 2. Rule-based (Rules tab → "ProBalance: Exempt matching processes from ProBalance")
-- `Rule::pbExempt` (`std::optional<bool>`, JSON key `"pb_exempt"`).
-- `RuleEngine::isPbExempt(procName)` — iterates enabled rules with `pbExempt=true`, returns true on first match.
-- Applied by name to every process in the snapshot; converts to PIDs before the tick.
-- Persisted in `config.json` with the rule.
+⚠️ **Substring matching is the sharp edge.** A short pattern (`sh`, or worse `e`)
+exempts most of the machine, and the failure is silent — ProBalance throttles nothing
+and logs nothing. The ProBalance tab carries a warning label above the list saying so;
+keep it there. If a bug report says "ProBalance does nothing", check `exempt_patterns`
+before anything else.
 
-### Merge in run()
+### The three exemption lists
+
+| # | List | Lives in | Lifetime | Written by |
+|---|------|----------|----------|-----------|
+| 1 | Permanent name patterns | `config.json` → `probalance.exempt_patterns` | Saved | ProBalance tab list, **and** the Processes context menu |
+| 2 | Session name patterns | `MainWindow::m_pbSessionExempt` → `ProcessMonitor::m_pbSessionExempt` | This run only | Processes context menu |
+| 3 | Rule-based | `Rule::pbExempt` (JSON `"pb_exempt"`) | Saved with the rule | Rules tab |
+
+List 1 is evaluated **inside** `ProBalance::isExempt()` from its own config copy.
+Lists 2 and 3 are resolved to PIDs in `ProcessMonitor::run()` and passed as
+`tick()`'s `exemptPids`. All three are honoured; matching any one is enough.
+
 ```cpp
+QStringList sessionPats;
+{ QMutexLocker lk(&m_configMux); sessionPats = m_pbSessionExempt; }
 QSet<int> pbExempt;
-{ QMutexLocker lk(&m_configMux); pbExempt = m_pbManualExempt; }
 for (const auto &proc : snapshot)
-    if (m_ruleEngine->isPbExempt(proc.name)) pbExempt.insert(proc.pid);
+    if (m_ruleEngine->isPbExempt(proc.name)
+     || ProBalance::nameMatchesAny(proc.name, sessionPats))
+        pbExempt.insert(proc.pid);
 m_proBalance->tick(snapshot, tickSec, pbExempt);
 ```
 
-`ProBalance::tick()` signature: `void tick(const QList<ProcessInfo>&, double, const QSet<int>& exemptPids = {})`.
-The existing name-pattern exemption (`exempt_patterns` in config) continues to work independently.
+⚠️ **There used to be a fourth: a session-only `QSet<int>` of PIDs**
+(`ProcessMonitor::setPbExempt`, `m_pbManualExempt`) behind the context menu. Nothing
+persisted it, it never appeared in the ProBalance tab, and it covered one PID — so
+exempting `firefox` left its `Isolated Web Co` children throttleable. That is how it
+got reported as broken. The API is **gone**; do not reintroduce per-PID exemption.
+Session scope is now a *name* list, list 2, which is what people actually want.
+
+### Context menu (Processes tab)
+
+A submenu, `ProBalance exemption for 'X'`, with two **checkable** actions —
+"This session only" and "Permanent (saved to config)" — so current state is visible
+rather than inferred from which verb the menu happens to be offering. They are
+independent (both can be ticked) and emit two separate signals,
+`pbExemptSessionToggled` / `pbExemptPermanentToggled`, landing on
+`MainWindow::onPbExemptSessionToggle` / `onPbExemptPermanentToggle`.
+
+`MainWindow::m_pbSessionExempt` is deliberately **not** in `m_config`, so
+`saveConfig()` cannot leak session exemptions into `config.json`.
+`refreshPbExemptPatterns()` is the one place that pushes both lists to the table and
+the session list to the monitor — call it after anything that changes either.
+
+### Becoming exempt while throttled — do not regress
+
+`tick()` does **not** simply `continue` past an exempt process. A process can be
+exempted *while it is throttled*; skipping it would strand it at the throttled nice
+value for the life of the process, which looks exactly like "exempting it did
+nothing". `tick()` restores `originalNice` and erases the state entry first.
+
+### Table display
+
+`ProcessTableWidget` holds both pattern lists (`setPbExemptPatterns(permanent,
+session)`) and matches them itself with `ProBalance::nameMatchesAny`, so the row
+colour, the Status column and the menu ticks agree by construction. Status is
+"⚡ PB Exempt" for permanent, "⚡ PB Exempt (session)" for session-only; both teal.
+
+`updateThrottled()` must be called **before** `updateSnapshot()` in
+`MainWindow::onSnapshot()` — the latter is what repaints the rows, so setting it
+after left the Status column one refresh stale. The exempt patterns are pushed on
+change instead of per frame.
+
+`MainWindow` reads the permanent patterns from **`m_config`**, never from
+`m_proBalance`, which belongs to the monitor thread.
+
+### Config handover is a monitor-thread job
+
+`MainWindow` never calls `m_proBalance->updateConfig()` — ProBalance has no mutex and
+`tick()` reads its config from the monitor thread. `ProcessMonitor::updateConfig()`
+only sets `m_pbConfigDirty` under `m_configMux`; `run()` picks the pending
+`probalance` object up and applies it itself. The right-click exemption writes config
+on every click, so this race was no longer theoretical.
+
+### Testing exemptions without launching the app
+
+`tests/probalance-harness.cpp` — 29 checks over the state machine and the exempt-list
+rules. Not in the CMake build; the `g++` line is in its header comment. It stubs
+`Utils::setNice()`, so it touches nothing on the live desktop. **Extend this rather
+than starting the app**, which enforces saved rules against every PID on Cesar's
+running session. See also the memory `process-lasso-dont-launch-to-test`.
 
 ---
 
@@ -686,8 +762,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.3.0-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.3.0-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.0-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.0-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -834,6 +910,8 @@ ProcessMonitor::logMessage            → MainWindow::appendLog
 RulesEditor::rulesChanged             → MainWindow::onRulesChanged
 ProcessTableWidget::ruleAddRequested  → MainWindow::onRuleAddFromTable
 ProcessTableWidget::affinityManually  → MainWindow::onAffinityManualChange
+ProcessTableWidget::pbExemptSessionToggled   → MainWindow::onPbExemptSessionToggle
+ProcessTableWidget::pbExemptPermanentToggled → MainWindow::onPbExemptPermanentToggle
 ProBalanceTab::settingsChanged        → MainWindow::onPbSettingsChanged
 GamingModeTab::gamingModeChanged      → MainWindow::onGamingModeChanged
 GamingModeTab::resetRequested         → MainWindow::onResetRequested
@@ -936,4 +1014,7 @@ add a wrapper in `cpupark.{h,cpp}`, invoke via `QProcess::execute("sudo", {"path
 
 **Thread safety**: RuleEngine and ProBalance have no internal mutex — they are only
 ever called from the monitor thread. Do not call them from the GUI thread directly.
-If you need GUI → engine communication, go through `ProcessMonitor::updateConfig()`.
+If you need GUI → engine communication, go through `ProcessMonitor::updateConfig()`,
+which flags the change and lets `run()` hand it to ProBalance on its own thread.
+(`MainWindow::onSnapshot()` still reads `m_proBalance->throttledPids()` from the GUI
+thread — a pre-existing race, not one to copy.)

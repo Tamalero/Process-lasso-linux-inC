@@ -4,6 +4,23 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.5
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Installing the privileged helper now actually works.** The installer looked for
+the helper binary one directory too high, so **Gaming Mode → install helper
+failed every time** from an AppImage or a packaged install. If your helper is
+installed, it got there some other way. It also works from a source checkout
+after a build now, and tells you when it needs root instead of failing with a
+confusing permissions error.
+
+**There is an uninstaller.** `pkexec bash /usr/share/process-lasso-qt/uninstall-helper.sh`
+removes the helper and its sudoers rule, moving both aside into `/var/backups/`
+rather than deleting them. It takes the sudoers rule off first and verifies the
+remaining configuration still parses before going any further, because a broken
+file under `/etc/sudoers.d` locks sudo out for everyone.
+
 ## What's New in 1.4.4
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

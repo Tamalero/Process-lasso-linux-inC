@@ -2,6 +2,51 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.5] — 2026-09-23
+
+### Fixed — installing the privileged helper never worked from an AppImage
+
+`install-helper.sh` looked for the helper binary one directory too high. The
+script is installed to `<prefix>/share/process-lasso-qt/`, and it resolved
+`<script dir>/../bin/` — that is `<prefix>/share/bin/`, which exists in no
+layout. The binary is at `<prefix>/bin/`, two levels up.
+
+So **Gaming Mode → install helper failed every time** from an AppImage or a
+packaged install, and had done since the path was introduced. Anyone whose
+helper is installed got it there some other way.
+
+The search now covers, in order: `<prefix>/bin` (installed and AppImage), the
+parent's `bin/` (DESTDIR-style trees), and `build/` plus `build-appimage/` so the
+script also works from a source checkout after a build — which it previously
+could not, since `<repo>/bin` never exists.
+
+It also now refuses to run as non-root up front, naming `pkexec`, instead of
+failing further down with "cannot change owner"; and when no binary is found it
+lists every path it searched.
+
+### Added — packaging/uninstall-helper.sh
+
+There was no supported way to remove the privileged helper and its sudoers rule
+other than doing it by hand.
+
+The sudoers rule is removed **first**, then `visudo -cqf /etc/sudoers` runs and
+the script aborts before touching the binary if the configuration no longer
+parses — a broken file under `/etc/sudoers.d` locks sudo out for everyone, so the
+passwordless grant goes first and is proven safe before anything else happens.
+
+It moves things aside into `/var/backups/process-lasso-uninstall-<timestamp>/`
+rather than deleting them; pass `--purge` to delete. Safe to run when nothing is
+installed.
+
+Run it with `pkexec bash /usr/share/process-lasso-qt/uninstall-helper.sh`.
+
+### Fixed — install-helper.sh was not marked executable
+
+It was the only script in the repository tracked as non-executable, so
+`./packaging/install-helper.sh` did not run despite having a shebang. The shipped
+copies were unaffected — CMake and the PKGBUILD both force mode 755 at install
+time.
+
 ## [1.4.4] — 2026-09-23
 
 ### Security — the sudoers rule was far too broad

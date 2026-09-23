@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.4**.
+Current version: **1.4.5**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.4). One feature lives off it:
+`main` is the released line (currently 1.4.5). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -982,8 +982,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.4-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.4-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.5-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.5-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

@@ -573,12 +573,26 @@ function defined in cpupark.cpp which returns `QStringLiteral("/usr/local/bin/pr
 ```
 pkexec bash /path/to/install-helper.sh
 ```
-The script resolves the helper binary **relative to its own location**:
+The script resolves the helper binary **relative to its own location**, searching a
+fixed candidate list.
+
+⚠️ **Fixed 1.4.5 — the original was off by one directory and never worked.** It used
+`$(dirname "$0")/..` + `/bin`. The script installs to `<prefix>/share/process-lasso-qt/`,
+so one level up is `<prefix>/share` and that resolved to `<prefix>/share/bin/…` — a
+directory that exists in no layout. Installing the helper from an AppImage or a
+packaged install therefore failed **every time**; this file previously claimed the
+opposite, which is why it went unnoticed. The binary is **two** levels up:
+
 ```bash
-HELPER_SRC="$(cd "$(dirname "$0")/.." && pwd)/bin/process-lasso-helper"
+DIR="$(cd "$(dirname "$0")" && pwd)"      # <prefix>/share/process-lasso-qt
+PREFIX="$(cd "$DIR/../.." && pwd)"        # <prefix>
+"$PREFIX/bin/process-lasso-helper"        # correct
 ```
-This works for both system installs (`/usr/share/…` → `../bin/…` = `/usr/bin/…`) and
-AppImage mounts (`$APPDIR/usr/share/…` → `$APPDIR/usr/bin/…`).
+
+The remaining candidates cover `DESTDIR` trees and a source checkout
+(`build/`, `build-appimage/`), so `./packaging/install-helper.sh` works from a clone
+after a build. The script also refuses to run as non-root with a clear message
+instead of failing later inside `install(1)`.
 
 **Do not** restore the old `${1:-...}` form. The C++ caller used to pass a username
 as `$1`; the script incorrectly used it as the helper source path, causing a silent

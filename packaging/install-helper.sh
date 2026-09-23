@@ -4,14 +4,55 @@
 # The helper binary is expected at ../bin/process-lasso-helper relative to this script.
 set -euo pipefail
 
-HELPER_SRC="$(cd "$(dirname "$0")/.." && pwd)/bin/process-lasso-helper"
+DIR="$(cd "$(dirname "$0")" && pwd)"          # …/share/process-lasso-qt, or …/packaging
+PARENT="$(cd "$DIR/.." && pwd)"               # …/share,                  or the repo root
+PREFIX="$(cd "$DIR/../.." && pwd)"            # …/usr (the install prefix), or above the repo
 HELPER_DST="/usr/local/bin/process-lasso-helper"
 SUDOERS_FILE="/etc/sudoers.d/process-lasso"
 
-if [[ ! -f "$HELPER_SRC" ]]; then
-    echo "ERROR: helper binary not found at $HELPER_SRC" >&2
+# Where the helper binary might be, in order.
+#
+# ⚠️ The FIRST entry is the one that matters in production. This script installs
+# to <prefix>/share/process-lasso-qt/, so the binary at <prefix>/bin/ is two
+# levels up — NOT one. The original "$DIR/../bin" resolved to
+# <prefix>/share/bin/, which does not exist in any layout, so installing the
+# helper from an AppImage or a packaged install could never find it and failed
+# every time. Do not "simplify" this back to one level.
+#
+# These are FIXED paths derived from this script's own location. Do NOT accept
+# the source path as an argument: an earlier version did, the C++ caller passed
+# a username in that position, and the script silently installed nothing.
+CANDIDATES=(
+    "$PREFIX/bin/process-lasso-helper"              # installed / AppImage: <prefix>/bin
+    "$PARENT/bin/process-lasso-helper"              # DESTDIR-style trees that put it one up
+    "$PARENT/build/process-lasso-helper"            # source checkout, default build dir
+    "$PARENT/build-appimage/process-lasso-helper"   # source checkout, AppImage build dir
+)
+
+HELPER_SRC=""
+for c in "${CANDIDATES[@]}"; do
+    if [[ -f "$c" ]]; then HELPER_SRC="$c"; break; fi
+done
+
+if [[ -z "$HELPER_SRC" ]]; then
+    echo "ERROR: helper binary not found. Looked in:" >&2
+    for c in "${CANDIDATES[@]}"; do echo "         $c" >&2; done
+    echo >&2
+    echo "       From a source checkout, build it first:" >&2
+    echo "         cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
     exit 1
 fi
+
+# install(1) below sets root ownership, which needs root. Say so plainly rather
+# than failing later with "cannot change owner".
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: this must run as root." >&2
+    echo "       pkexec bash $0" >&2
+    echo "       (the application does this for you: Gaming Mode tab → install helper)" >&2
+    exit 1
+fi
+
+echo "Installing helper from: $HELPER_SRC"
 
 install -o root -g root -m 0755 "$HELPER_SRC" "$HELPER_DST"
 

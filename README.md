@@ -4,6 +4,19 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.3
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Two rules for the same application no longer fight each other.** Nothing
+stopped you adding a second rule for something that already had one — and if the
+two set the same thing to different values, they overwrote each other twice a
+second forever, flooding the Log and bogging the app down. The first matching
+rule now wins for each setting, so an existing duplicate config fixes itself with
+no clean-up. Settings that can never apply are shown struck through in the Rules
+tab, and adding a duplicate warns you first and offers to edit the existing rule
+instead.
+
 ## What's New in 1.4.2
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

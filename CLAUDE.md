@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.2**.
+Current version: **1.4.3**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.2). One feature lives off it:
+`main` is the released line (currently 1.4.3). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -309,6 +309,40 @@ re-reads that one process and repaints immediately after a successful change.
 mechanism. `tests/monitor-harness.cpp` exercises the real override path headlessly and
 passed throughout — that disagreement between a passing test and a user's screen was
 the clue, and it was read as "cannot reproduce" for too long.
+
+---
+
+## Two rules matching the same process (v1.4.3)
+
+Nothing stops two enabled rules matching the same process — the Rules tab happily
+holds two `firefox` rules, and the Processes tab's *Add Rule for '<name>'…* makes it
+easy to create the second one by accident.
+
+If both set the **same attribute to different values** they overwrite each other on
+every enforcement pass: rule A writes its value and logs, rule B writes its value and
+logs, twice a second, forever. ⚠️ The v1.4.1 no-op skip **cannot** damp this — it
+suppresses writes when the value already matches, and here the value genuinely changes
+every time. It is a second, independent route to the same GUI-starvation flood.
+
+**`applyToProcess()` is first-match-wins, PER ATTRIBUTE.** The first enabled matching
+rule that defines an attribute claims it; later rules are ignored for that attribute
+only. Per attribute, not per rule, so "rule A sets affinity, rule B sets nice" still
+combines correctly — that is a legitimate setup and must keep working.
+
+The claim is staked **even when the write fails**, otherwise a losing rule steps in on
+the next pass and restarts the fight.
+
+`RuleEngine::shadowedAttributes()` reports `ruleId → field names` for attributes that
+can never apply because an earlier enabled rule with the **same pattern and match
+type** already claims them. The Rules tab strikes those cells through in grey with a
+tooltip — a setting that is in the config but inert must not look live. Only the
+exactly-duplicated case is reported: general pattern overlap is undecidable (regex),
+and first-match-wins handles it safely regardless.
+
+`RulesEditor::findDuplicate()` / `confirmDuplicate()` guard **add, add-from-Processes-tab
+and edit**, offering *Edit existing rule* / *Add anyway* / *Cancel*.
+
+Covered by `tests/ruleengine-harness.cpp`, which fails 3/10 against the 1.4.2 engine.
 
 ---
 
@@ -858,8 +892,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.2-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.2-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.3-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.3-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

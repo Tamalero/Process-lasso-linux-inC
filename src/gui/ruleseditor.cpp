@@ -1,4 +1,6 @@
 #include "ruleseditor.h"
+#include <QColor>
+#include <QFont>
 #include "dialogs.h"
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -50,6 +52,7 @@ RulesEditor::RulesEditor(RuleEngine *engine, QWidget *parent)
 void RulesEditor::refresh()
 {
     const auto &rules = m_engine->rules();
+    const auto shadow = m_engine->shadowedAttributes();
     m_table->setRowCount(rules.size());
     for (int row = 0; row < rules.size(); ++row) {
         const auto &r = rules[row];
@@ -61,9 +64,28 @@ void RulesEditor::refresh()
             r.ioniceClass ? QString::number(*r.ioniceClass) : QString{},
             r.ioniceLevel ? QString::number(*r.ioniceLevel) : QString{}
         };
+        const QStringList shadowed = shadow.value(r.ruleId);
         for (int col = 0; col < cells.size(); ++col) {
             auto *item = new QTableWidgetItem(cells[col]);
             item->setData(Qt::UserRole, r.ruleId);
+            // Grey out and strike through any attribute an earlier rule with the
+            // same pattern already claims: it is in the config but can never take
+            // effect, and leaving it looking live is how you end up believing a
+            // rule is broken.
+            const bool dead =
+                (col == 4 && shadowed.contains(QStringLiteral("affinity")))
+             || (col == 5 && shadowed.contains(QStringLiteral("nice")))
+             || ((col == 6 || col == 7) && shadowed.contains(QStringLiteral("I/O priority")));
+            if (dead && !cells[col].isEmpty()) {
+                QFont f = item->font();
+                f.setStrikeOut(true);
+                item->setFont(f);
+                item->setForeground(QColor(QStringLiteral("#6c7086")));
+                item->setToolTip(QStringLiteral(
+                    "Never applied: an earlier rule with the same pattern (\"%1\", %2) "
+                    "already sets this. The first matching rule wins, per attribute.")
+                        .arg(r.pattern, r.matchType));
+            }
             m_table->setItem(row, col, item);
         }
     }
@@ -71,6 +93,11 @@ void RulesEditor::refresh()
 
 void RulesEditor::addRuleDirect(const Rule &rule)
 {
+    // Reached from the Processes tab's "Add Rule for '<name>'…", which is exactly
+    // how a second rule for an already-covered process gets created by accident.
+    if (const Rule *dup = findDuplicate(rule)) {
+        if (!confirmDuplicate(*dup, rule)) return;
+    }
     m_engine->addRule(rule);
     refresh();
     emit rulesChanged();
@@ -84,13 +111,68 @@ QString RulesEditor::selectedRuleId() const
     return item ? item->data(Qt::UserRole).toString() : QString{};
 }
 
+// Returns the first enabled rule that targets exactly the same processes as
+// `candidate` (same pattern, same match type), ignoring `candidate` itself.
+const Rule *RulesEditor::findDuplicate(const Rule &candidate) const
+{
+    for (const auto &r : m_engine->rules()) {
+        if (r.ruleId == candidate.ruleId) continue;
+        if (!r.enabled) continue;
+        if (r.matchType == candidate.matchType
+         && r.pattern.compare(candidate.pattern, Qt::CaseInsensitive) == 0)
+            return &r;
+    }
+    return nullptr;
+}
+
+// True if the user still wants to go ahead after being told about `existing`.
+bool RulesEditor::confirmDuplicate(const Rule &existing, const Rule &candidate)
+{
+    QStringList clashes;
+    if (existing.affinity    && candidate.affinity)    clashes << QStringLiteral("affinity");
+    if (existing.nice        && candidate.nice)        clashes << QStringLiteral("priority");
+    if (existing.ioniceClass && candidate.ioniceClass) clashes << QStringLiteral("I/O priority");
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(QStringLiteral("A rule for this already exists"));
+    box.setText(QStringLiteral("<b>%1</b> already matches <b>%2</b> (%3).")
+                    .arg(existing.name, candidate.pattern, candidate.matchType));
+    box.setInformativeText(clashes.isEmpty()
+        ? QStringLiteral("Two rules matching the same processes is allowed, but the "
+                         "first one wins for any setting they both define.")
+        : QStringLiteral("Both rules set <b>%1</b>. Only the first one takes effect — "
+                         "the other's %1 is ignored entirely and will be shown struck "
+                         "through.<br><br>Edit the existing rule instead?")
+              .arg(clashes.join(QStringLiteral(" and "))));
+    auto *editBtn = box.addButton(QStringLiteral("Edit existing rule"), QMessageBox::AcceptRole);
+    auto *addBtn  = box.addButton(QStringLiteral("Add anyway"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(editBtn);
+    box.exec();
+
+    if (box.clickedButton() == addBtn) return true;
+    if (box.clickedButton() == editBtn) {
+        const Rule target = existing;          // copy: refresh() invalidates the ref
+        RuleEditDialog edit(&target, this);
+        if (edit.exec() == QDialog::Accepted) {
+            m_engine->updateRule(edit.getRule());
+            refresh(); emit rulesChanged();
+        }
+    }
+    return false;
+}
+
 void RulesEditor::addRule()
 {
     RuleEditDialog dlg(nullptr, this);
-    if (dlg.exec() == QDialog::Accepted) {
-        m_engine->addRule(dlg.getRule());
-        refresh(); emit rulesChanged();
+    if (dlg.exec() != QDialog::Accepted) return;
+    const Rule candidate = dlg.getRule();
+    if (const Rule *dup = findDuplicate(candidate)) {
+        if (!confirmDuplicate(*dup, candidate)) return;
     }
+    m_engine->addRule(candidate);
+    refresh(); emit rulesChanged();
 }
 
 void RulesEditor::editSelected()
@@ -100,10 +182,15 @@ void RulesEditor::editSelected()
     const auto it = std::find_if(rules.cbegin(), rules.cend(), [&](const Rule &r){ return r.ruleId == id; });
     if (it == rules.cend()) return;
     RuleEditDialog dlg(&(*it), this);
-    if (dlg.exec() == QDialog::Accepted) {
-        m_engine->updateRule(dlg.getRule());
-        refresh(); emit rulesChanged();
+    if (dlg.exec() != QDialog::Accepted) return;
+    const Rule edited = dlg.getRule();
+    // Editing a rule's pattern can turn it into a duplicate just as easily as
+    // adding one does.
+    if (const Rule *dup = findDuplicate(edited)) {
+        if (!confirmDuplicate(*dup, edited)) return;
     }
+    m_engine->updateRule(edited);
+    refresh(); emit rulesChanged();
 }
 
 void RulesEditor::deleteSelected()

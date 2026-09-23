@@ -1,4 +1,5 @@
 #include "ruleengine.h"
+#include <QSet>
 #include "utils.h"
 #include "cputopology.h"
 #include "verbose.h"
@@ -93,9 +94,23 @@ void RuleEngine::updateRule(const Rule &rule)
 QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
 {
     QStringList actions;
+    // FIRST MATCHING RULE WINS, PER ATTRIBUTE.
+    //
+    // Nothing stops two enabled rules matching the same process. If both set the
+    // same attribute to different values they overwrite each other on every
+    // enforcement pass — each one "correcting" the other twice a second, forever,
+    // logging as it goes. That is a log flood the 1.4.1 no-op skip cannot damp,
+    // because the value really is changing every time.
+    //
+    // Per attribute, not per rule: one rule setting affinity and another setting
+    // nice for the same process is a legitimate combination and still works.
+    bool affinityDone = false, niceDone = false, ioniceDone = false;
     for (const auto &rule : m_rules) {
         if (!rule.matches(procName)) continue;
-        if (rule.affinity) {
+        if (rule.affinity && !affinityDone) {
+            // Claimed even if the write below fails, so a losing rule cannot
+            // step in on the next pass and restart the fight.
+            affinityDone = true;
             // Enforcement runs twice a second over every matching pid. Writing
             // and logging a value that is ALREADY correct turned that into a
             // flood: ~150 browser processes produced ~300 log lines/second into
@@ -141,7 +156,8 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 }
             }
         }
-        if (rule.nice) {
+        if (rule.nice && !niceDone) {
+            niceDone = true;
             int curNice = 0;
             const bool niceKnown = Utils::getNice(pid, curNice);
             if (niceKnown && curNice == *rule.nice) {
@@ -152,7 +168,8 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 log(msg); actions << msg;
             }
         }
-        if (rule.ioniceClass) {
+        if (rule.ioniceClass && !ioniceDone) {
+            ioniceDone = true;
             const int level = rule.ioniceLevel.value_or(0);
             int curClass = 0, curLevel = 0;
             const bool ioKnown = Utils::getIoNice(pid, curClass, curLevel);
@@ -166,6 +183,30 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
         }
     }
     return actions;
+}
+
+QHash<QString, QStringList> RuleEngine::shadowedAttributes() const
+{
+    QHash<QString, QStringList> out;
+    QSet<QString> haveAffinity, haveNice, haveIonice;
+    for (const auto &r : m_rules) {
+        if (!r.enabled || r.pattern.isEmpty()) continue;
+        // Same pattern AND same match type = the same set of processes.
+        const QString key = r.pattern.toLower() + QChar(u'\u0000') + r.matchType;
+        if (r.affinity) {
+            if (haveAffinity.contains(key)) out[r.ruleId] << QStringLiteral("affinity");
+            else                            haveAffinity.insert(key);
+        }
+        if (r.nice) {
+            if (haveNice.contains(key)) out[r.ruleId] << QStringLiteral("nice");
+            else                        haveNice.insert(key);
+        }
+        if (r.ioniceClass) {
+            if (haveIonice.contains(key)) out[r.ruleId] << QStringLiteral("I/O priority");
+            else                          haveIonice.insert(key);
+        }
+    }
+    return out;
 }
 
 bool RuleEngine::isPbExempt(const QString &procName) const

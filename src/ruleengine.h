@@ -3,6 +3,7 @@
 #include <QList>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QUuid>
 #include <optional>
 #include <functional>
@@ -41,6 +42,12 @@ public:
 
     // Returns list of action strings for each applied action; empty = no rule matched.
     QStringList applyToProcess(int pid, const QString &procName);
+
+    // Attributes that can never take effect because an earlier enabled rule with
+    // the SAME pattern and match type already claims them. ruleId → field names.
+    // Only the exactly-duplicated case is reported; general pattern overlap is
+    // undecidable, and applyToProcess() handles that safely anyway.
+    QHash<QString, QStringList> shadowedAttributes() const;
 
     // Returns true if any enabled rule with pbExempt=true matches procName.
     bool isPbExempt(const QString &procName) const;

@@ -2,6 +2,34 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.3] — 2026-09-23
+
+### Fixed — two rules for the same process fought each other, flooding the log
+
+Nothing stopped you adding a second rule for an application that already had
+one, and *Add Rule for '<name>'…* in the Processes tab made it easy to do by
+accident. When both rules set the same attribute to different values they
+overwrote each other on every enforcement pass — twice a second, forever, each
+flip writing a log line. That is the same GUI-starvation flood fixed in 1.4.1,
+reached by a different route, and the 1.4.1 fix could not damp it: that one
+skips writes when the value already matches, and here the value really did
+change every time.
+
+- **The first matching rule now wins, per attribute.** The first enabled rule
+  that defines affinity, priority or I/O priority claims it; later rules are
+  ignored for that attribute only. "One rule sets affinity, another sets
+  priority" still combines exactly as before.
+- **Shadowed settings are shown struck through** in the Rules tab, in grey, with
+  a tooltip explaining which rule claimed them. A setting that sits in your
+  config but can never apply should not look live.
+- **Adding a duplicate now warns first**, naming the existing rule and which
+  settings clash, and offers to edit that rule instead. This covers adding from
+  the Rules tab, adding from the Processes tab, and editing a rule's pattern
+  into a duplicate.
+
+Existing configurations with duplicate rules are fixed by the first change
+alone — no clean-up needed.
+
 ## [1.4.2] — 2026-09-23
 
 ### Added — edit a rule without leaving the Processes tab

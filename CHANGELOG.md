@@ -2,6 +2,38 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.6] — 2026-09-23
+
+### Fixed — "install-helper.sh not found in data directory"
+
+Pressing **Install / Update Helper** while running the app from a source build
+directory reported that, because the search only knew the installed layouts:
+XDG data directories, and `<binary>/../share/process-lasso-qt/`. From
+`<repo>/build` neither exists.
+
+It now also looks in `<binary>/../packaging/` and `<binary>/packaging/`, so the
+button works when running straight out of a checkout. When it still finds
+nothing, the message lists **every path it searched** instead of a bare "not
+found", which sent you looking for a missing file rather than a wrong
+assumption.
+
+### Fixed — the window opacity slider silently did nothing on Wayland
+
+`setWindowOpacity()` is a no-op under Wayland. There is no window-opacity request
+in the protocol, and Qt's Wayland plugin does not implement it — X11 does this by
+setting the `_NET_WM_WINDOW_OPACITY` window property, which is why the same
+slider works under X11 and XWayland.
+
+The slider is now **disabled on Wayland with an explanation**, pointing at the
+compositor instead (on KDE: Alt+scroll over the window). Dragging a control that
+cannot do anything, with nothing to say why, is worse than not offering it.
+
+### Internal
+
+`config.cpp` wrote a `ui.opacity` default that nothing ever read — the real key
+is top-level `window_opacity`. Removed, and the schema in `CLAUDE.md` corrected;
+it had documented the dead key.
+
 ## [1.4.5] — 2026-09-23
 
 ### Fixed — installing the privileged helper never worked from an AppImage

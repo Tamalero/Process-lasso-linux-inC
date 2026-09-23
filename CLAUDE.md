@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.5**.
+Current version: **1.4.6**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.5). One feature lives off it:
+`main` is the released line (currently 1.4.6). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -598,17 +598,36 @@ instead of failing later inside `install(1)`.
 as `$1`; the script incorrectly used it as the helper source path, causing a silent
 install failure (`[[ ! -f "cesarin" ]]`).
 
-### CpuPark::installHelper() — AppImage path fallback
+### CpuPark::installHelper() — where it looks for the script
 
-`installHelper()` in `cpupark.cpp` searches for `install-helper.sh` in two places:
+1. `QStandardPaths::locate(AppDataLocation, …)` — system and user installs, and
+   AppImages (AppRun prepends `$APPDIR/usr/share` to `XDG_DATA_DIRS`).
+2. `applicationDirPath() + "/../share/process-lasso-qt/…"` — AppImage / portable.
+3. `applicationDirPath() + "/../packaging/…"` — **source checkout**: `<repo>/build`
+   → `<repo>/packaging`. Added 1.4.6; without it, running the app straight out of a
+   build directory reported *"install-helper.sh not found in data directory"* with
+   no indication that the layout was simply unknown to it.
+4. `applicationDirPath() + "/packaging/…"` — binary sitting at the repo root.
 
-1. `QStandardPaths::locate(AppDataLocation, "install-helper.sh")` — standard XDG
-   locations; works for system and user installs.
-2. `QCoreApplication::applicationDirPath() + "/../share/process-lasso-qt/install-helper.sh"`
-   — fallback for AppImage and portable builds where `QStandardPaths` does not
-   search inside `$APPDIR`.
+**All** must remain. The failure message now lists every path searched; keep that —
+the bare version sent the reader looking for a missing file rather than a wrong
+assumption.
 
-**Both** must remain in place. Do not remove the fallback.
+### Window opacity does not work on Wayland (v1.4.6)
+
+`QWidget::setWindowOpacity()` is a **silent no-op** under Wayland. Verified on this
+machine: `libQt6XcbQpa.so.6` contains `_NET_WM_WINDOW_OPACITY` (X11 sets that window
+property), while `libQt6WaylandClient.so.6` contains no opacity protocol at all and
+only the inherited `QPlatformWindow::setOpacity` base symbol. There is no
+window-opacity request in xdg-shell, so a client cannot do this.
+
+The slider is therefore **disabled with an explanation** when
+`QGuiApplication::platformName()` starts with `wayland`, and `applyTheme()` skips the
+call rather than making it and having it ignored. It still works under X11 and
+XWayland. Do not "fix" this by re-enabling the control.
+
+Config key is **top-level `window_opacity`**, not `ui.opacity`. A dead
+`ui.opacity` default sat in `config.cpp` that nothing ever read; removed in 1.4.6.
 
 ---
 
@@ -643,8 +662,10 @@ Saved by: `Config::save()` — atomic write (`.tmp` + rename)
   "rules": [],                        // array of Rule JSON objects
   "ui": {
     "system_theme": false,
-    "opacity": 100
-  }
+    "overwrite_matching_rules": false
+  },
+  "window_opacity": 100            // TOP-LEVEL, not under "ui". Ignored on
+                                   // Wayland — see below.
 }
 ```
 
@@ -982,8 +1003,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.5-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.5-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.6-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.6-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

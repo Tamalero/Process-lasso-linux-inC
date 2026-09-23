@@ -4,6 +4,20 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.6
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**"install-helper.sh not found in data directory" is fixed.** The app only knew
+how to find the installer in an installed layout, so the button failed when
+running from a source build directory. It now looks in the checkout too, and if
+it still cannot find the script it lists every path it searched.
+
+**The window opacity slider no longer pretends to work on Wayland.** Wayland has
+no way for a window to set its own opacity, so the setting was silently ignored —
+it works on X11 and XWayland only. The slider is now disabled there with a note
+pointing at your compositor (on KDE: Alt+scroll over the window).
+
 ## What's New in 1.4.5
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QJsonArray>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QCloseEvent>
 #include <QFont>
 #include <QFrame>
@@ -419,8 +420,13 @@ void MainWindow::applyTheme()
         QSlider::handle:horizontal { background:#89b4fa; width:14px; height:14px;
                                       margin:-5px 0; border-radius:7px; }
     )"));
-    const int opacity = m_config[QStringLiteral("window_opacity")].toInt(100);
-    setWindowOpacity(opacity / 100.0);
+    // No-op on Wayland — see the note in settingstab.cpp. Skipped rather than
+    // called-and-ignored so this does not read as working code.
+    if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland"),
+                                                    Qt::CaseInsensitive)) {
+        const int opacity = m_config[QStringLiteral("window_opacity")].toInt(100);
+        setWindowOpacity(opacity / 100.0);
+    }
 }
 
 // ---------- temperature toggle ----------

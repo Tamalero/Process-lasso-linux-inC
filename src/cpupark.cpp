@@ -40,24 +40,39 @@ std::pair<bool, QString> installHelper(const QString &username)
 {
     Q_UNUSED(username)
 
-    // Search standard data locations first (system/user install).
+    // Search standard data locations first (system/user install). Inside an
+    // AppImage this works because AppRun prepends $APPDIR/usr/share to
+    // XDG_DATA_DIRS.
     QString script = QStandardPaths::locate(
         QStandardPaths::AppDataLocation,
         QStringLiteral("install-helper.sh"));
 
-    // Fallback: look relative to the application binary.
-    // Works for AppImage (binary lives at $APPDIR/usr/bin/) and portable builds.
-    if (script.isEmpty()) {
-        const QString candidate =
-            QFileInfo(QCoreApplication::applicationDirPath() +
-                      QStringLiteral("/../share/process-lasso-qt/install-helper.sh"))
-            .absoluteFilePath();
-        if (QFile::exists(candidate))
-            script = candidate;
+    // Then look relative to the binary. The share/ entry covers an AppImage
+    // ($APPDIR/usr/bin → $APPDIR/usr/share/…) and a system install; the
+    // packaging/ entries cover running straight out of a source checkout, which
+    // previously failed with a bare "not found in data directory" and no clue
+    // that the app was simply looking in the wrong place for that layout.
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList relative = {
+        QStringLiteral("/../share/process-lasso-qt/install-helper.sh"),
+        QStringLiteral("/../packaging/install-helper.sh"),   // <repo>/build → <repo>/packaging
+        QStringLiteral("/packaging/install-helper.sh"),      // binary at the repo root
+    };
+    QStringList tried;
+    for (const auto &rel : relative) {
+        const QString candidate = QFileInfo(appDir + rel).absoluteFilePath();
+        tried << candidate;
+        if (script.isEmpty() && QFile::exists(candidate)) script = candidate;
     }
 
-    if (script.isEmpty())
-        return {false, QStringLiteral("install-helper.sh not found in data directory.")};
+    if (script.isEmpty()) {
+        // Say where it looked. "Not found in data directory" gave the user
+        // nothing to act on and hid which layout was in play.
+        return {false, QStringLiteral("install-helper.sh not found.\n\nLooked in:\n  %1\n  %2")
+                           .arg(QStandardPaths::standardLocations(
+                                    QStandardPaths::AppDataLocation).join(QStringLiteral("\n  ")),
+                                tried.join(QStringLiteral("\n  ")))};
+    }
 
     QProcess p;
     p.start(QStringLiteral("pkexec"),

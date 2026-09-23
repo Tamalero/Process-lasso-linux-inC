@@ -1,4 +1,5 @@
 #include "settingstab.h"
+#include <QGuiApplication>
 #include "dialogs.h"
 #include "../cputopology.h"
 #include "../sensors.h"
@@ -100,6 +101,31 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
     opacRow->addWidget(m_opacitySlider, 1);
     opacRow->addWidget(m_opacityLabel);
     appForm->addRow(QStringLiteral("Window opacity:"), opacRow);
+
+    // Wayland has no window-opacity protocol, and Qt's Wayland plugin does not
+    // implement QPlatformWindow::setOpacity — it inherits the base class no-op.
+    // (X11 does it by setting the _NET_WM_WINDOW_OPACITY property, which is why
+    // the same slider works under XWayland or a plain X session.)
+    // So the slider could be dragged all day and nothing happened, with nothing
+    // to say why. Disable it and explain instead of failing silently.
+    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"),
+                                                   Qt::CaseInsensitive)) {
+        m_opacitySlider->setEnabled(false);
+        m_opacityLabel->setText(QStringLiteral("n/a"));
+        const QString why = QStringLiteral(
+            "Not available on Wayland: the protocol has no way for a window to "
+            "set its own opacity, so this is ignored.\n\n"
+            "Your compositor can still do it — on KDE, Alt+scroll over the "
+            "window, or a window rule.");
+        m_opacitySlider->setToolTip(why);
+        m_opacityLabel->setToolTip(why);
+        auto *note = new QLabel(QStringLiteral(
+            "⚠  Window opacity is not supported on Wayland — set it in your "
+            "compositor instead (KDE: Alt+scroll over the window)."), this);
+        note->setStyleSheet(QStringLiteral("color: rgba(249,226,175,0.85); font-size: 11px;"));
+        note->setWordWrap(true);
+        appForm->addRow(QString(), note);
+    }
 
     auto *appApply = new QPushButton(QStringLiteral("Apply Appearance"), this);
     connect(appApply, &QPushButton::clicked, this, [this]{

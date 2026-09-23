@@ -1,4 +1,5 @@
 #include "utils.h"
+#include <cerrno>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -95,6 +96,24 @@ QString getAffinityStr(int pid)
 bool setNice(int pid, int nice)
 {
     return setpriority(PRIO_PROCESS, (unsigned)pid, nice) == 0;
+}
+
+bool getNice(int pid, int &nice)
+{
+    errno = 0;
+    const int v = getpriority(PRIO_PROCESS, (unsigned)pid);
+    if (v == -1 && errno != 0) return false;   // -1 is a legal nice value
+    nice = v;
+    return true;
+}
+
+bool getIoNice(int pid, int &ioclass, int &iolevel)
+{
+    const int ioprio = (int)syscall(SYS_ioprio_get, 1 /*IOPRIO_WHO_PROCESS*/, pid);
+    if (ioprio < 0) return false;
+    ioclass = ioprio >> 13;
+    iolevel = ioprio & 0x1fff;
+    return true;
 }
 
 bool setIoNice(int pid, int ioclass, int iolevel)

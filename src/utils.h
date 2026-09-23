@@ -15,6 +15,11 @@ QString getAffinityStr(int pid);
 bool setNice(int pid, int nice);
 bool setIoNice(int pid, int ioclass, int iolevel);
 
+// Readers used to skip no-op writes. Each returns false when the value cannot
+// be read (process gone), in which case the caller should just try the write.
+bool getNice(int pid, int &nice);
+bool getIoNice(int pid, int &ioclass, int &iolevel);
+
 QSet<int> getOnlineCpus();
 int       getCpuCount();
 bool      validateCpulist(const QString &cpulist);

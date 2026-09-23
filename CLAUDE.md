@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.0**.
+Current version: **1.4.1**.
 
 ---
 
@@ -37,6 +37,8 @@ src/
                           SteamGamePickerDialog, LutrisGamePickerDialog
 tests/
   probalance-harness.cpp— standalone ProBalance checks; not in the CMake build
+  ruleengine-harness.cpp— asserts rule enforcement is SILENT once values match
+  monitor-harness.cpp   — drives ProcessMonitor headless: rule apply + manual override
 helper/
   main.cpp              — privileged C binary (no Qt), commands below
 packaging/
@@ -51,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.0). One feature lives off it:
+`main` is the released line (currently 1.4.1). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -250,6 +252,39 @@ to no restriction at all and is harmless.
   same gotcha as `QFile::atEnd()` below. A shell scan using it silently matches
   nothing and looks like a clean result. Read the content and test for emptiness
   instead.
+
+---
+
+## Rule enforcement must be a no-op when nothing changed (v1.4.1)
+
+`RuleEngine::applyToProcess()` runs for **every matching pid, twice a second**.
+Until 1.4.1 it wrote and logged unconditionally, which meant a steady state that
+was already correct still produced a write and a log line every pass.
+
+Cesar's config has 9 rules matching ~150 brave/chromium/firefox/"Isolated Web Co"
+processes. That is ~300 log lines/second into the Log tab's `QTextEdit` **on the
+GUI thread** (each one a queued `logMessage` signal), plus — because
+`Utils::setAffinity()` loops over every **thread** of the process — thousands of
+`sched_setaffinity` calls a second. The GUI thread saturates and the window stops
+servicing input, which presents as *"setting affinity does nothing"* even though
+the affinity code is fine. It also fits an unclean shutdown.
+
+**Rule: read before you write.** Each of the three actions compares first
+(`Utils::getAffinityStr` / `getNice` / `getIoNice`) and skips both the syscall and
+the log line when the value already matches. A rule that genuinely needs applying
+still applies and logs exactly once.
+
+Affinity compares **sets**, not strings — `cpulistToSet()` on both sides — so
+`"16-31"` and `"16-17,18-31"` are the same mask. An empty read (process gone)
+falls through to the write rather than being treated as a match.
+
+⚠️ Do not "simplify" this back to an unconditional write. The logging volume is
+the load-bearing part: this is a GUI-thread starvation bug, not a syscall-cost
+bug. `getAffinityStr()` reads only the main thread while `setAffinity()` writes
+all of them; that is deliberate and fine, because threads inherit the mask.
+
+**Diagnostic tell:** if the app is sluggish or "ignores" the UI, look at the Log
+tab first. Identical lines repeating every second for the same pids is this bug.
 
 ---
 
@@ -587,6 +622,10 @@ on every click, so this race was no longer theoretical.
 
 ### Testing exemptions without launching the app
 
+`tests/` holds three standalone harnesses, none of them in the CMake build; each
+carries its own `g++` line in its header comment. `monitor-harness.cpp` needs a
+`moc` pass on `processmonitor.h` (it is a QObject) — the header says how.
+
 `tests/probalance-harness.cpp` — 29 checks over the state machine and the exempt-list
 rules. Not in the CMake build; the `g++` line is in its header comment. It stubs
 `Utils::setNice()`, so it touches nothing on the live desktop. **Extend this rather
@@ -762,8 +801,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.0-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.0-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.1-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.1-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

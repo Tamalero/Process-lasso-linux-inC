@@ -2,6 +2,38 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.1] — 2026-09-23
+
+### Fixed — the app became unresponsive, and rules looked like they did nothing
+
+`RuleEngine::applyToProcess()` re-applied **and re-logged** every rule on every
+enforcement pass, whether or not the value needed changing. With nine rules
+matching ~150 browser processes at a 500 ms interval that is roughly **300 log
+lines per second** pushed into the Log tab's text view on the GUI thread, plus a
+`sched_setaffinity` for *every thread* of every one of those processes —
+thousands of syscalls a second.
+
+The GUI thread never caught up. Setting affinity from the context menu appeared
+to do nothing, the process list stopped refreshing, and the Log tab was
+unreadable. The affinity machinery was fine throughout; the UI simply could not
+service input.
+
+Rules now read the current affinity, nice and I/O priority first and skip the
+write **and** the log line when the value is already correct. A rule that
+genuinely needs applying still applies and still logs, exactly once. Steady
+state is silent, so the Log tab shows only real changes.
+
+Present since 1.3.3; it scaled with the number of matching processes, which is
+why it surfaced now.
+
+### Fixed — a manual affinity change could be reverted immediately
+
+`m_manualOverrides` — the map that protects a manual affinity change from rule
+re-enforcement for 30 seconds — was written from the GUI thread with no mutex
+while the monitor thread iterated and erased from it twice a second. A dropped
+insert means the next pass reverts the change; a `QHash` insert racing an
+iteration can also corrupt the container outright. It is now guarded.
+
 ## [1.4.0] — 2026-09-23
 
 ### Added — session-only vs. permanent ProBalance exemptions

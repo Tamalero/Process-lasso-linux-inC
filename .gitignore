@@ -14,3 +14,5 @@ packaging/appimage-tools/
 
 # harness binaries built by hand from tests/
 tests/probalance-harness
+tests/ruleengine-harness
+tests/monitor-harness

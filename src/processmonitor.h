@@ -75,7 +75,7 @@ private:
     bool              m_gamingNice      = false;
     QHash<int, int>   m_gamingNiced;     // pid → original nice
 
-    QHash<int, double> m_manualOverrides;  // pid → expiry monotonic s
+    QHash<int, double> m_manualOverrides;  // pid → expiry monotonic s; guarded by m_configMux
     QStringList        m_pbSessionExempt;  // guarded by m_configMux
 
     QString defaultAffinity() const;

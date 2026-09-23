@@ -96,7 +96,19 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
     for (const auto &rule : m_rules) {
         if (!rule.matches(procName)) continue;
         if (rule.affinity) {
-            if (Utils::setAffinity(pid, *rule.affinity)) {
+            // Enforcement runs twice a second over every matching pid. Writing
+            // and logging a value that is ALREADY correct turned that into a
+            // flood: ~150 browser processes produced ~300 log lines/second into
+            // the Log tab's QTextEdit on the GUI thread, plus a
+            // sched_setaffinity for every *thread* of every one of them. The
+            // GUI thread saturates and the app stops responding to input —
+            // which looks exactly like setting affinity being ignored.
+            // So: read first, and do nothing at all when nothing needs doing.
+            const QSet<int> want = Utils::cpulistToSet(*rule.affinity);
+            const QSet<int> have = Utils::cpulistToSet(Utils::getAffinityStr(pid));
+            if (!have.isEmpty() && have == want) {
+                // Already correct. No syscall, no log line.
+            } else if (Utils::setAffinity(pid, *rule.affinity)) {
                 const QString msg = QStringLiteral("[Rule:%1] affinity=%2 → %3(%4)")
                     .arg(rule.name, *rule.affinity, procName).arg(pid);
                 log(msg); actions << msg;
@@ -130,7 +142,11 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
             }
         }
         if (rule.nice) {
-            if (Utils::setNice(pid, *rule.nice)) {
+            int curNice = 0;
+            const bool niceKnown = Utils::getNice(pid, curNice);
+            if (niceKnown && curNice == *rule.nice) {
+                // Already correct — same reasoning as affinity above.
+            } else if (Utils::setNice(pid, *rule.nice)) {
                 const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4)")
                     .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
                 log(msg); actions << msg;
@@ -138,7 +154,11 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
         }
         if (rule.ioniceClass) {
             const int level = rule.ioniceLevel.value_or(0);
-            if (Utils::setIoNice(pid, *rule.ioniceClass, level)) {
+            int curClass = 0, curLevel = 0;
+            const bool ioKnown = Utils::getIoNice(pid, curClass, curLevel);
+            if (ioKnown && curClass == *rule.ioniceClass && curLevel == level) {
+                // Already correct — same reasoning as affinity above.
+            } else if (Utils::setIoNice(pid, *rule.ioniceClass, level)) {
                 const QString msg = QStringLiteral("[Rule:%1] ionice class=%2 level=%3 → %4(%5)")
                     .arg(rule.name).arg(*rule.ioniceClass).arg(level).arg(procName).arg(pid);
                 log(msg); actions << msg;

@@ -173,6 +173,13 @@ void ProcessMonitor::setGamingMode(bool active, bool elevateNice)
 
 void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
 {
+    // Called from the GUI thread; run() prunes and reads this hash every
+    // enforceInterval on the monitor thread. Without the lock a concurrent
+    // insert can be dropped — and a dropped override means the next
+    // enforcement pass reverts the user's manual change within half a second,
+    // which looks exactly like setting affinity doing nothing at all. A QHash
+    // insert racing an iteration can also corrupt the container outright.
+    QMutexLocker lk(&m_configMux);
     m_manualOverrides[pid] = (double)nowNs() / 1e9 + durationSeconds;
 }
 
@@ -389,12 +396,23 @@ void ProcessMonitor::run()
             // what is not trusted after repeated unclean shutdowns.
             if (!safeMode && now - lastEnforce >= enforceInterval) {
                 const double nowD = now;
-                for (auto it = m_manualOverrides.begin(); it != m_manualOverrides.end(); ) {
-                    if (it.value() <= nowD) it = m_manualOverrides.erase(it);
-                    else ++it;
+                // Prune expired entries and take the live set under the lock,
+                // then release it: applyToProcess() below does syscalls and must
+                // not run with m_configMux held.
+                QSet<int> overridden;
+                {
+                    QMutexLocker lk(&m_configMux);
+                    for (auto it = m_manualOverrides.begin(); it != m_manualOverrides.end(); ) {
+                        if (it.value() <= nowD) {
+                            it = m_manualOverrides.erase(it);
+                        } else {
+                            overridden.insert(it.key());
+                            ++it;
+                        }
+                    }
                 }
                 for (const auto &info : snapshot) {
-                    if (m_manualOverrides.contains(info.pid)) continue;
+                    if (overridden.contains(info.pid)) continue;
                     m_ruleEngine->applyToProcess(info.pid, info.name);
                 }
                 lastEnforce = now;

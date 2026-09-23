@@ -4,6 +4,22 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.1
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**The app no longer grinds itself to a halt.** Rules were re-applying *and
+re-logging* on every enforcement pass even when nothing needed changing — with
+a handful of rules matching a browser's ~150 processes that is around 300 log
+lines a second on the GUI thread, plus thousands of redundant syscalls. The
+window stopped responding, setting affinity by hand looked like it did nothing,
+and the Log tab was unusable. Rules now check the current value first and stay
+silent when there is nothing to do, so the Log shows only real changes.
+
+**A manual affinity change is no longer reverted straight away.** The 30-second
+protection that keeps your rules from immediately overwriting a manual change
+was being written across threads without a lock, so it could be lost.
+
 ## What's New in 1.4.0
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

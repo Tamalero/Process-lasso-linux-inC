@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.7**.
+Current version: **1.4.8**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.7). One feature lives off it:
+`main` is the released line (currently 1.4.8). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -616,6 +616,32 @@ AppImage. Use **`GenericDataLocation`** with an explicit `"process-lasso-qt/"` p
 Either change `setOrganizationName()` **and** the install path together, or leave
 both alone. Changing one silently breaks every data lookup.
 
+### ⚠️ root CANNOT read anything inside the AppImage (v1.4.8)
+
+An AppImage is a **FUSE mount owned by the invoking user**, and FUSE refuses access
+to every other uid — *including root* — unless `/etc/fuse.conf` sets
+`user_allow_other`, which is off by default and no application may assume.
+
+So `pkexec bash /tmp/.mount_XXXX/usr/share/process-lasso-qt/install-helper.sh` fails
+with a bare **"Permission denied"** even when the user authenticates correctly. Root
+genuinely cannot open that path. Nothing about the polkit side is wrong, which is why
+the message is so misleading.
+
+`installHelper()` therefore **stages** `install-helper.sh` *and* the helper binary
+into a `QTemporaryDir` before invoking pkexec, laid out like an install prefix:
+
+```
+<tmp>/share/process-lasso-qt/install-helper.sh
+<tmp>/bin/process-lasso-helper
+```
+
+so the script's own `$PREFIX/bin` lookup resolves without it knowing it is a copy.
+The temp dir is 0700 and owned by the user — fine, because root bypasses ordinary
+DAC on a normal filesystem; it is only FUSE that blocks it.
+
+**Anything handed to pkexec, sudo or a root helper must be copied out of the mount
+first.** This applies to any future file the privileged side needs to read.
+
 ### CpuPark::installHelper() — where it looks for the script
 
 1. `QStandardPaths::locate(GenericDataLocation, "process-lasso-qt/install-helper.sh")`
@@ -1024,8 +1050,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.7-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.7-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.8-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.8-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

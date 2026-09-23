@@ -2,6 +2,27 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.8] — 2026-09-23
+
+### Fixed — "Install failed: … install-helper.sh: Permission denied"
+
+With 1.4.7 the installer script was finally found, and the next failure appeared
+immediately: pkexec authenticated correctly and then could not read the script.
+
+An AppImage is a FUSE mount owned by the user who launched it, and FUSE denies
+access to every other uid — **including root** — unless `/etc/fuse.conf` enables
+`user_allow_other`, which is off by default. So root genuinely cannot open a path
+inside a running AppImage, and nothing on the polkit side was wrong; the error
+just gave no hint of that.
+
+The installer now copies both the script and the helper binary out of the mount
+into a temporary directory laid out like an install prefix, and runs pkexec
+against that copy.
+
+Also: a cancelled or failed pkexec that prints nothing on stderr now reports its
+exit code instead of an empty "Install failed:", and the timeout was raised from
+30s to 120s so a slow authentication prompt is not cut off.
+
 ## [1.4.7] — 2026-09-23
 
 ### Fixed — "install-helper.sh not found", for real this time

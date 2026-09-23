@@ -2,6 +2,8 @@
 #include "cputopology.h"
 #include <QCoreApplication>
 #include <QFile>
+#include <QTemporaryDir>
+#include <QDir>
 #include <QFileInfo>
 #include <QProcess>
 #include <QStandardPaths>
@@ -82,15 +84,71 @@ std::pair<bool, QString> installHelper(const QString &username)
                                 tried.join(QStringLiteral("\n  ")))};
     }
 
+    // The helper binary the script will install. Same layout problem as the
+    // script itself: inside the AppImage, applicationDirPath() is the mount root.
+    const QStringList helperRel = {
+        QStringLiteral("/usr/bin/process-lasso-helper"),   // AppImage mount root
+        QStringLiteral("/process-lasso-helper"),           // <prefix>/bin, or a build dir
+        QStringLiteral("/../bin/process-lasso-helper"),
+    };
+    QString helperSrc;
+    QStringList helperTried;
+    for (const auto &rel : helperRel) {
+        const QString candidate = QFileInfo(appDir + rel).absoluteFilePath();
+        helperTried << candidate;
+        if (helperSrc.isEmpty() && QFile::exists(candidate)) helperSrc = candidate;
+    }
+    if (helperSrc.isEmpty())
+        return {false, QStringLiteral("process-lasso-helper binary not found.\n\nLooked in:\n  %1")
+                           .arg(helperTried.join(QStringLiteral("\n  ")))};
+
+    // Copy both out of the AppImage before handing anything to pkexec.
+    //
+    // An AppImage is a FUSE mount owned by the invoking user, and FUSE refuses
+    // access to every other uid — including root — unless /etc/fuse.conf enables
+    // user_allow_other, which is off by default and not something an application
+    // may assume. So "pkexec bash /tmp/.mount_XXXX/…/install-helper.sh" fails with
+    // a bare "Permission denied" even though the caller authenticated correctly:
+    // root genuinely cannot read a path inside that mount.
+    //
+    // Staging is laid out like an install prefix (<tmp>/share/process-lasso-qt/
+    // and <tmp>/bin/) so the script's own "$PREFIX/bin" lookup resolves without
+    // it needing to know it is being run from a copy.
+    QTemporaryDir stage;
+    if (!stage.isValid())
+        return {false, QStringLiteral("Could not create a staging directory:\n") +
+                       stage.errorString()};
+
+    const QString stagedShare  = stage.filePath(QStringLiteral("share/process-lasso-qt"));
+    const QString stagedBin    = stage.filePath(QStringLiteral("bin"));
+    if (!QDir().mkpath(stagedShare) || !QDir().mkpath(stagedBin))
+        return {false, QStringLiteral("Could not prepare the staging directory.")};
+
+    const QString stagedScript = stagedShare + QStringLiteral("/install-helper.sh");
+    const QString stagedHelper = stagedBin   + QStringLiteral("/process-lasso-helper");
+    if (!QFile::copy(script, stagedScript))
+        return {false, QStringLiteral("Could not stage install-helper.sh from:\n") + script};
+    if (!QFile::copy(helperSrc, stagedHelper))
+        return {false, QStringLiteral("Could not stage the helper binary from:\n") + helperSrc};
+
+    const auto rx = QFile::ReadOwner  | QFile::WriteOwner | QFile::ExeOwner
+                  | QFile::ReadGroup  | QFile::ExeGroup
+                  | QFile::ReadOther  | QFile::ExeOther;
+    QFile::setPermissions(stagedScript, rx);
+    QFile::setPermissions(stagedHelper, rx);
+
     QProcess p;
     p.start(QStringLiteral("pkexec"),
-            QStringList{QStringLiteral("bash"), script});
-    if (!p.waitForFinished(30000))
+            QStringList{QStringLiteral("bash"), stagedScript});
+    if (!p.waitForFinished(120000))
         return {false, QStringLiteral("pkexec timed out.")};
     if (p.exitCode() == 0)
         return {true, QStringLiteral("Helper and sudoers rule installed.")};
+    const QString err = QString::fromUtf8(p.readAllStandardError()).trimmed();
     return {false, QStringLiteral("Install failed:\n") +
-                   QString::fromUtf8(p.readAllStandardError())};
+                   (err.isEmpty() ? QStringLiteral("pkexec exited with code %1 "
+                                                   "(cancelled?)").arg(p.exitCode())
+                                  : err)};
 }
 
 static std::pair<bool, QString> runHelper(const QStringList &args)

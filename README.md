@@ -4,6 +4,15 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.8
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Installing the privileged helper from an AppImage now completes.** An AppImage
+is a FUSE mount owned by the user who launched it, and FUSE denies access to
+every other user — including root — so `pkexec` authenticated fine and then could
+not read the installer script. The files are now copied out of the mount first.
+
 ## What's New in 1.4.7
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.6**.
+Current version: **1.4.7**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.6). One feature lives off it:
+`main` is the released line (currently 1.4.7). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -598,16 +598,37 @@ instead of failing later inside `install(1)`.
 as `$1`; the script incorrectly used it as the helper source path, causing a silent
 install failure (`[[ ! -f "cesarin" ]]`).
 
+### ⚠️ Two facts that broke installHelper() twice — do not rediscover them
+
+**1. `applicationDirPath()` is the AppImage MOUNT ROOT, not `$APPDIR/usr/bin`.**
+`packaging/build-appimage.sh` puts a **copy of the application binary at
+`$APPDIR/AppRun`** (verified: identical md5 to `usr/bin/process-lasso-qt`), and that
+copy is what executes. So `/proc/self/exe` — and therefore `applicationDirPath()` —
+is `/tmp/.mount_XXXXXX`, and `"../share/…"` resolves to `/tmp/share/…`. Anything
+computed relative to the binary must use `"/usr/share/…"` from that root.
+
+**2. `QStandardPaths::AppDataLocation` can never find our data.** It appends
+`<organizationName>/<applicationName>` → `share/AcornInteractive/process-lasso-qt`,
+but CMake installs to `${CMAKE_INSTALL_DATADIR}/process-lasso-qt` → `share/process-lasso-qt`.
+No organisation directory, so the two never meet — in *any* layout, installed or
+AppImage. Use **`GenericDataLocation`** with an explicit `"process-lasso-qt/"` prefix.
+
+Either change `setOrganizationName()` **and** the install path together, or leave
+both alone. Changing one silently breaks every data lookup.
+
 ### CpuPark::installHelper() — where it looks for the script
 
-1. `QStandardPaths::locate(AppDataLocation, …)` — system and user installs, and
-   AppImages (AppRun prepends `$APPDIR/usr/share` to `XDG_DATA_DIRS`).
-2. `applicationDirPath() + "/../share/process-lasso-qt/…"` — AppImage / portable.
-3. `applicationDirPath() + "/../packaging/…"` — **source checkout**: `<repo>/build`
-   → `<repo>/packaging`. Added 1.4.6; without it, running the app straight out of a
-   build directory reported *"install-helper.sh not found in data directory"* with
-   no indication that the layout was simply unknown to it.
-4. `applicationDirPath() + "/packaging/…"` — binary sitting at the repo root.
+1. `QStandardPaths::locate(GenericDataLocation, "process-lasso-qt/install-helper.sh")`
+   — system and user installs, **and** AppImages, because AppRun prepends
+   `$APPDIR/usr/share` to `XDG_DATA_DIRS`. This is the one that does the work.
+2. `applicationDirPath() + "/usr/share/process-lasso-qt/…"` — AppImage, from the
+   mount root. Covers the case where `XDG_DATA_DIRS` was *not* patched, so the two
+   mechanisms are independent.
+3. `applicationDirPath() + "/../share/process-lasso-qt/…"` — `<prefix>/bin` layouts.
+4. `applicationDirPath() + "/../packaging/…"` and `"/packaging/…"` — source checkout.
+
+Verified against a real extracted AppImage with and without the `XDG_DATA_DIRS`
+patch, from a build directory, and from a bogus path.
 
 **All** must remain. The failure message now lists every path searched; keep that —
 the bare version sent the reader looking for a missing file rather than a wrong
@@ -1003,8 +1024,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.6-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.6-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.7-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.7-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

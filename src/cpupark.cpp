@@ -40,23 +40,32 @@ std::pair<bool, QString> installHelper(const QString &username)
 {
     Q_UNUSED(username)
 
-    // Search standard data locations first (system/user install). Inside an
-    // AppImage this works because AppRun prepends $APPDIR/usr/share to
-    // XDG_DATA_DIRS.
+    // Finding this script has been wrong twice. Both causes, written down so
+    // they are not reintroduced:
+    //
+    // 1. AppDataLocation appends <organizationName>/<applicationName>, i.e.
+    //    share/AcornInteractive/process-lasso-qt -- but CMake installs the
+    //    script to share/process-lasso-qt, with no organisation directory. That
+    //    lookup could never match, in ANY layout. GenericDataLocation with an
+    //    explicit "process-lasso-qt/" prefix is the one that works, and it
+    //    covers the AppImage too, because AppRun prepends $APPDIR/usr/share to
+    //    XDG_DATA_DIRS.
+    //
+    // 2. applicationDirPath() is NOT $APPDIR/usr/bin inside the AppImage. The
+    //    build puts a COPY of the binary at $APPDIR/AppRun and that is what
+    //    runs, so /proc/self/exe -- and therefore applicationDirPath() -- is the
+    //    mount ROOT (/tmp/.mount_XXXXXX). "../share/..." resolved to
+    //    /tmp/share/... Hence the "/usr/share/..." candidate, relative to root.
     QString script = QStandardPaths::locate(
-        QStandardPaths::AppDataLocation,
-        QStringLiteral("install-helper.sh"));
+        QStandardPaths::GenericDataLocation,
+        QStringLiteral("process-lasso-qt/install-helper.sh"));
 
-    // Then look relative to the binary. The share/ entry covers an AppImage
-    // ($APPDIR/usr/bin → $APPDIR/usr/share/…) and a system install; the
-    // packaging/ entries cover running straight out of a source checkout, which
-    // previously failed with a bare "not found in data directory" and no clue
-    // that the app was simply looking in the wrong place for that layout.
     const QString appDir = QCoreApplication::applicationDirPath();
     const QStringList relative = {
-        QStringLiteral("/../share/process-lasso-qt/install-helper.sh"),
-        QStringLiteral("/../packaging/install-helper.sh"),   // <repo>/build → <repo>/packaging
-        QStringLiteral("/packaging/install-helper.sh"),      // binary at the repo root
+        QStringLiteral("/usr/share/process-lasso-qt/install-helper.sh"), // AppImage: appDir is the mount root
+        QStringLiteral("/../share/process-lasso-qt/install-helper.sh"),  // <prefix>/bin
+        QStringLiteral("/../packaging/install-helper.sh"),               // <repo>/build
+        QStringLiteral("/packaging/install-helper.sh"),                  // repo root
     };
     QStringList tried;
     for (const auto &rel : relative) {
@@ -66,11 +75,10 @@ std::pair<bool, QString> installHelper(const QString &username)
     }
 
     if (script.isEmpty()) {
-        // Say where it looked. "Not found in data directory" gave the user
-        // nothing to act on and hid which layout was in play.
         return {false, QStringLiteral("install-helper.sh not found.\n\nLooked in:\n  %1\n  %2")
                            .arg(QStandardPaths::standardLocations(
-                                    QStandardPaths::AppDataLocation).join(QStringLiteral("\n  ")),
+                                    QStandardPaths::GenericDataLocation)
+                                    .join(QStringLiteral("/process-lasso-qt\n  ")),
                                 tried.join(QStringLiteral("\n  ")))};
     }
 

@@ -4,6 +4,17 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.7
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Installing the privileged helper works from the AppImage.** 1.4.6 made the
+failure explain itself, which immediately revealed that *both* search mechanisms
+were wrong: paths relative to the binary assumed `usr/bin`, but the AppImage runs
+a copy of the binary from the mount root; and the XDG lookup searched a directory
+that the installer never writes to. Both fixed, and they now work independently
+of each other.
+
 ## What's New in 1.4.6
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

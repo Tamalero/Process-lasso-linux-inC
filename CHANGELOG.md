@@ -2,6 +2,25 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.7] — 2026-09-23
+
+### Fixed — "install-helper.sh not found", for real this time
+
+1.4.6 made the failure *explain itself*, and the explanation immediately showed
+that both search mechanisms were wrong:
+
+- **`applicationDirPath()` is the AppImage mount root, not `<mount>/usr/bin`.**
+  The build places a copy of the application binary at `AppRun`, and that copy is
+  what runs — so paths relative to the binary needed `usr/share/…`, not
+  `../share/…`, which was resolving to `/tmp/share/…`.
+- **The XDG lookup could never have matched.** It searched
+  `share/AcornInteractive/process-lasso-qt` (Qt appends the organisation and
+  application names) while the script installs to `share/process-lasso-qt`.
+
+Both are fixed, and the two mechanisms are now independent — the helper is found
+whether or not the AppImage runtime patches `XDG_DATA_DIRS`. Verified against a
+real extracted AppImage, a source build directory, and a path with nothing in it.
+
 ## [1.4.6] — 2026-09-23
 
 ### Fixed — "install-helper.sh not found in data directory"

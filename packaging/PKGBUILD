@@ -1,6 +1,6 @@
 # Maintainer: Cesar <cesar@acorninteractive.ca>
 pkgname=process-lasso-qt
-pkgver=1.4.9
+pkgver=1.5.0
 pkgrel=1
 pkgdesc="Native Qt6 Linux process manager — CPU affinity, ProBalance, Gaming Mode"
 arch=('x86_64')

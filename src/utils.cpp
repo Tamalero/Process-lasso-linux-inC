@@ -99,9 +99,12 @@ QString describeAffinityError(int err, int pid)
         const QString owner = fi.owner().isEmpty()
             ? QStringLiteral("uid %1").arg(fi.ownerId())
             : fi.owner();
+        // Deliberately does not name the operation: this explains nice and
+        // I/O priority failures too, and it used to tell people their PRIORITY
+        // failure was about "CPU affinity".
         return QStringLiteral("not permitted — the process belongs to %1 and "
                               "Process Lasso is running as %2. Changing another "
-                              "user's CPU affinity needs root.")
+                              "user's process needs root.")
                    .arg(owner, QStringLiteral("uid %1").arg(getuid()));
     }
     if (err == ESRCH)  return QStringLiteral("the process exited");

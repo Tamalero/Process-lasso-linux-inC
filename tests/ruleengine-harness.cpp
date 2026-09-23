@@ -139,6 +139,72 @@ int main(int argc, char **argv)
         check(logs == 1, "without a handler, EPERM is explained exactly once");
     }
 
+    // ── 6. Telling apart processes that share a name ───────────────────────
+    //     The real case: several python3.13 interpreters, only one of which is
+    //     ComfyUI. A name rule cannot distinguish them; a cmdline rule can.
+    {
+        QJsonObject byName = mkRule("n", "all-python", "2-5");
+        byName["pattern"] = "python3.13";
+        QJsonObject byCmd = mkRule("c", "comfyui-only", "2-5");
+        byCmd["pattern"] = "ComfyUI/main.py";
+        byCmd["match_target"] = "cmdline";
+
+        RuleEngine re; re.loadRules(QJsonArray{ byName, byCmd });
+        const Rule nameRule = re.rules().at(0);
+        const Rule cmdRule  = re.rules().at(1);
+
+        const QString comfy = QStringLiteral("python3.13 ./ComfyUI/main.py --listen --port 8188");
+        const QString other = QStringLiteral("python3.13 /usr/bin/some-other-tool.py");
+
+        check(nameRule.matches("python3.13", comfy),  "name rule matches ComfyUI's python");
+        check(nameRule.matches("python3.13", other),  "name rule ALSO matches the other python (the problem)");
+        check(cmdRule.matches("python3.13", comfy),   "cmdline rule matches ComfyUI's python");
+        check(!cmdRule.matches("python3.13", other),  "cmdline rule does NOT match the other python");
+        check(!cmdRule.matches("python3.13", QString()),
+              "a cmdline rule cannot match when the command line is unknown");
+
+        // match_target must survive a JSON round trip, or it silently reverts
+        // to matching the name and starts hitting every python again.
+        const Rule back = Rule::fromJson(cmdRule.toJson());
+        check(back.matchTarget == QLatin1String("cmdline"), "match_target round-trips through JSON");
+        check(back.matches("python3.13", comfy) && !back.matches("python3.13", other),
+              "…and still discriminates after the round trip");
+
+        // Old rules with no match_target must keep matching by name.
+        QJsonObject legacy = mkRule("l", "legacy", "2-5");
+        legacy["pattern"] = "python3.13";
+        legacy.remove("match_target");
+        check(Rule::fromJson(legacy).matches("python3.13", other),
+              "a rule saved before this feature still matches by name");
+    }
+
+    // ── 7. A rule that cannot apply is reported as failing, and recovers ───
+    //     pid 1 is root-owned, so nice on it fails with EPERM unprivileged.
+    {
+        QJsonObject r = mkRule("f", "root-nice", nullptr);
+        r["nice"] = 7;
+        RuleEngine re; re.loadRules(QJsonArray{ r });
+        check(re.ruleFailures().isEmpty(), "no failures before anything is applied");
+
+        re.applyToProcess(1, "plqprobe");
+        const auto f = re.ruleFailures();
+        check(f.value("f").contains(QStringLiteral("nice")),
+              "a rule that cannot apply its priority is marked failing");
+        check(f.value("f").value(QStringLiteral("nice")).contains(QStringLiteral("root")),
+              "…and the reason names the owner");
+
+        const quint64 gen = re.failureGeneration();
+        re.applyToProcess(1, "plqprobe");
+        check(re.failureGeneration() == gen,
+              "repeating the same failure does not churn the generation (no repaint storm)");
+
+        // Applying successfully to a process we DO own clears the mark.
+        re.applyToProcess(pid, "plqprobe");
+        check(!re.ruleFailures().value("f").contains(QStringLiteral("nice")),
+              "the mark clears once the rule applies successfully");
+        check(re.failureGeneration() > gen, "…and that bumps the generation so the table repaints");
+    }
+
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",
            failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

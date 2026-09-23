@@ -473,6 +473,20 @@ RuleEditDialog::RuleEditDialog(const Rule *existingRule, QWidget *parent)
     form->addRow(QStringLiteral("Name:"),        m_nameEdit);
     form->addRow(QStringLiteral("Pattern:"),     m_patternEdit);
     form->addRow(QStringLiteral("Match type:"),  m_matchCombo);
+
+    // Several processes commonly share one name — a dozen python interpreters,
+    // every Electron app called "node". Matching the full command line is the
+    // only way to single one out.
+    m_targetCombo = new QComboBox(this);
+    m_targetCombo->addItem(QStringLiteral("Process name"),  QStringLiteral("name"));
+    m_targetCombo->addItem(QStringLiteral("Command line"),  QStringLiteral("cmdline"));
+    m_targetCombo->setToolTip(QStringLiteral(
+        "What the pattern is tested against.\n\n"
+        "Process name — e.g. \"python3.13\". Matches every process with that name.\n"
+        "Command line — the full command, e.g. "
+        "\"python3.13 ./ComfyUI/main.py --listen --port 8188\".\n"
+        "Use the command line to target one of several processes sharing a name."));
+    form->addRow(QStringLiteral("Match against:"), m_targetCombo);
     form->addRow(QStringLiteral("CPU Affinity:"),affRow);
     form->addRow(QStringLiteral("Nice priority:"),niceRow);
     form->addRow(QStringLiteral("I/O priority:"), ioniceRow);
@@ -486,6 +500,8 @@ RuleEditDialog::RuleEditDialog(const Rule *existingRule, QWidget *parent)
         m_patternEdit->setText(existingRule->pattern);
         const int idx = m_matchCombo->findText(existingRule->matchType);
         if (idx >= 0) m_matchCombo->setCurrentIndex(idx);
+        const int tidx = m_targetCombo->findData(existingRule->matchTarget);
+        if (tidx >= 0) m_targetCombo->setCurrentIndex(tidx);
         if (existingRule->affinity) { m_affinityCb->setChecked(true); m_affinityDisplay->setText(*existingRule->affinity); }
         if (existingRule->nice)      { m_niceCb->setChecked(true);    m_niceSpin->setValue(*existingRule->nice); }
         if (existingRule->ioniceClass) {
@@ -555,6 +571,7 @@ Rule RuleEditDialog::getRule() const
     r.name      = m_nameEdit->text().trimmed();
     r.pattern   = m_patternEdit->text().trimmed();
     r.matchType = m_matchCombo->currentText();
+    r.matchTarget = m_targetCombo->currentData().toString();
     r.enabled   = m_enabledCb->isChecked();
     if (m_affinityCb->isChecked() && !m_affinityDisplay->text().trimmed().isEmpty())
         r.affinity = m_affinityDisplay->text().trimmed();

@@ -4,6 +4,27 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.5.0
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Rules can match the command line.** Several processes often share a name — a
+dozen `python3.13` interpreters, every Electron app called `node` — and a rule on
+the name hits all of them. Rules now have a **Match against** setting: *Process
+name* (the default, unchanged for existing rules) or *Command line*, so you can
+target `ComfyUI/main.py` and leave every other python alone.
+
+**The Rules tab shows rules that are failing.** A rule whose setting could not be
+applied used to show a plain "Yes" in the Enabled column — the Log said it was
+failing, the Rules tab said it was fine. It now reads **⚠ Failing**, with the
+specific setting in red and a tooltip explaining why. The mark clears on its own
+once the rule applies successfully.
+
+**Priority now works on processes you do not own.** Affinity escalated to the
+privileged helper when you granted a rule permission; priority never did, so a
+rule could set affinity on a root-owned process and then silently fail to set its
+priority. A priority failure also claimed it was about "CPU affinity".
+
 ## What's New in 1.4.9
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

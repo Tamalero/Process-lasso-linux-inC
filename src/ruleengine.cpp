@@ -10,17 +10,21 @@
 
 // ── Rule ──────────────────────────────────────────────────────────────────────
 
-bool Rule::matches(const QString &procName) const
+bool Rule::matches(const QString &procName, const QString &cmdline) const
 {
     if (!enabled || pattern.isEmpty()) return false;
+    // Rules written before matchTarget existed have it defaulted to "name",
+    // so their behaviour is unchanged.
+    const QString subject = (matchTarget == QLatin1String("cmdline")) ? cmdline : procName;
+    if (subject.isEmpty()) return false;
     if (matchType == QLatin1String("exact"))
-        return procName == pattern;
+        return subject == pattern;
     if (matchType == QLatin1String("regex")) {
         const QRegularExpression re(pattern);
-        return re.isValid() && re.match(procName).hasMatch();
+        return re.isValid() && re.match(subject).hasMatch();
     }
     // "contains" (default)
-    return procName.toLower().contains(pattern.toLower());
+    return subject.toLower().contains(pattern.toLower());
 }
 
 QJsonObject Rule::toJson() const
@@ -30,6 +34,7 @@ QJsonObject Rule::toJson() const
     obj[QStringLiteral("name")]        = name;
     obj[QStringLiteral("pattern")]     = pattern;
     obj[QStringLiteral("match_type")]  = matchType;
+    obj[QStringLiteral("match_target")] = matchTarget;
     obj[QStringLiteral("affinity")]    = affinity ? QJsonValue(*affinity) : QJsonValue::Null;
     obj[QStringLiteral("nice")]        = nice     ? QJsonValue(*nice)     : QJsonValue::Null;
     obj[QStringLiteral("ionice_class")]= ioniceClass ? QJsonValue(*ioniceClass) : QJsonValue::Null;
@@ -47,6 +52,7 @@ Rule Rule::fromJson(const QJsonObject &obj)
     r.name      = obj[QStringLiteral("name")].toString();
     r.pattern   = obj[QStringLiteral("pattern")].toString();
     r.matchType = obj[QStringLiteral("match_type")].toString(QStringLiteral("contains"));
+    r.matchTarget = obj[QStringLiteral("match_target")].toString(QStringLiteral("name"));
     r.enabled   = obj[QStringLiteral("enabled")].toBool(true);
     const auto aff = obj[QStringLiteral("affinity")];
     if (!aff.isNull() && aff.isString()) r.affinity = aff.toString();
@@ -99,7 +105,7 @@ void RuleEngine::updateRule(const Rule &rule)
 // One line per rule+process for a failure that will otherwise repeat on every
 // enforcement pass, twice a second, forever.
 void RuleEngine::warnOnce(const Rule &rule, int pid, const QString &procName,
-                          const QString &what, int err)
+                          const QString &what, int err, const QString &attr)
 {
     const QString key = rule.ruleId + QLatin1Char('|') + QString::number(pid)
                       + QLatin1Char('|') + what;
@@ -111,9 +117,42 @@ void RuleEngine::warnOnce(const Rule &rule, int pid, const QString &procName,
         : QString::fromLocal8Bit(strerror(err ? err : EINVAL));
     log(QStringLiteral("[Rule:%1] %2 NOT applied to %3(%4) — %5")
             .arg(rule.name, what, procName).arg(pid).arg(why));
+    noteFailure(rule.ruleId, attr,
+                QStringLiteral("%1 could not be applied to %2(%3): %4")
+                    .arg(what, procName).arg(pid).arg(why));
 }
 
-QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
+QHash<QString, QHash<QString, QString>> RuleEngine::ruleFailures() const
+{
+    QMutexLocker lk(&m_failMux);
+    return m_ruleFailures;
+}
+
+quint64 RuleEngine::failureGeneration() const
+{
+    QMutexLocker lk(&m_failMux);
+    return m_failGen;
+}
+
+void RuleEngine::noteFailure(const QString &ruleId, const QString &attr, const QString &reason)
+{
+    QMutexLocker lk(&m_failMux);
+    if (m_ruleFailures[ruleId].value(attr) == reason) return;   // unchanged, no repaint
+    m_ruleFailures[ruleId][attr] = reason;
+    ++m_failGen;
+}
+
+void RuleEngine::clearFailure(const QString &ruleId, const QString &attr)
+{
+    QMutexLocker lk(&m_failMux);
+    auto it = m_ruleFailures.find(ruleId);
+    if (it == m_ruleFailures.end() || !it->contains(attr)) return;
+    it->remove(attr);
+    if (it->isEmpty()) m_ruleFailures.erase(it);
+    ++m_failGen;
+}
+
+QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const QString &cmdline)
 {
     QStringList actions;
     // FIRST MATCHING RULE WINS, PER ATTRIBUTE.
@@ -128,7 +167,7 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
     // nice for the same process is a legitimate combination and still works.
     bool affinityDone = false, niceDone = false, ioniceDone = false;
     for (const auto &rule : m_rules) {
-        if (!rule.matches(procName)) continue;
+        if (!rule.matches(procName, cmdline)) continue;
         if (rule.affinity && !affinityDone) {
             // Claimed even if the write below fails, so a losing rule cannot
             // step in on the next pass and restart the fight.
@@ -145,8 +184,11 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
             const QSet<int> have = Utils::cpulistToSet(Utils::getAffinityStr(pid));
             int setErr = 0;
             if (!have.isEmpty() && have == want) {
-                // Already correct. No syscall, no log line.
+                // Already correct. No syscall, no log line — and whatever was
+                // wrong before evidently is not any more.
+                clearFailure(rule.ruleId, QStringLiteral("affinity"));
             } else if (Utils::setAffinity(pid, *rule.affinity, &setErr)) {
+                clearFailure(rule.ruleId, QStringLiteral("affinity"));
                 const QString msg = QStringLiteral("[Rule:%1] affinity=%2 → %3(%4)")
                     .arg(rule.name, *rule.affinity, procName).arg(pid);
                 log(msg); actions << msg;
@@ -194,6 +236,8 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                                 .arg(rule.name, *rule.affinity, procName)
                                 .arg(pid)
                                 .arg(Utils::describeAffinityError(setErr, pid)));
+                        noteFailure(rule.ruleId, QStringLiteral("affinity"),
+                                    Utils::describeAffinityError(setErr, pid));
                     }
                 }
                 // Only the parked case is worth telling the user about: it is
@@ -212,6 +256,8 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                     log(QStringLiteral("[Rule:%1] affinity=%2 NOT applied to %3 — "
                                        "every one of those CPUs is parked.")
                             .arg(rule.name, *rule.affinity, procName));
+                    noteFailure(rule.ruleId, QStringLiteral("affinity"),
+                                QStringLiteral("every one of those CPUs is parked"));
                 }
             }
         }
@@ -221,15 +267,35 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
             const bool niceKnown = Utils::getNice(pid, curNice);
             if (niceKnown && curNice == *rule.nice) {
                 // Already correct — same reasoning as affinity above.
+                clearFailure(rule.ruleId, QStringLiteral("nice"));
             } else if (Utils::setNice(pid, *rule.nice)) {
+                clearFailure(rule.ruleId, QStringLiteral("nice"));
                 const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4)")
                     .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
                 log(msg); actions << msg;
             } else {
-                // Previously silent. A rule that cannot apply its priority — a
-                // process owned by someone else, or a negative value beyond
-                // RLIMIT_NICE — looked exactly like a rule doing nothing.
-                warnOnce(rule, pid, procName, QStringLiteral("priority %1").arg(*rule.nice), errno);
+                const int err = errno;
+                const QString what = QStringLiteral("priority %1").arg(*rule.nice);
+                const bool mayEscalate = rule.allowHelper.value_or(false)
+                                      || m_sessionHelper.contains(rule.ruleId);
+                // The helper has had renice-pid since long before set-affinity,
+                // but only affinity ever used it — so a rule could set affinity
+                // on a root-owned process and then fail to set its priority.
+                if (err == EPERM && mayEscalate
+                 && CpuPark::setProcessNiceViaHelper(pid, *rule.nice)) {
+                    const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4) (via privileged helper)")
+                        .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
+                    log(msg); actions << msg;
+                } else if (err == EPERM && !mayEscalate && m_escalationCb
+                        && !m_escalationAsked.contains(rule.ruleId)) {
+                    m_escalationAsked.insert(rule.ruleId);
+                    m_escalationCb(rule.ruleId, rule.name, pid, procName, what);
+                } else {
+                    // Previously silent. A rule that cannot apply its priority —
+                    // a process owned by someone else, or a value beyond
+                    // RLIMIT_NICE — looked exactly like a rule doing nothing.
+                    warnOnce(rule, pid, procName, what, err, QStringLiteral("nice"));
+                }
             }
         }
         if (rule.ioniceClass && !ioniceDone) {
@@ -239,14 +305,17 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
             const bool ioKnown = Utils::getIoNice(pid, curClass, curLevel);
             if (ioKnown && curClass == *rule.ioniceClass && curLevel == level) {
                 // Already correct — same reasoning as affinity above.
+                clearFailure(rule.ruleId, QStringLiteral("ionice"));
             } else if (Utils::setIoNice(pid, *rule.ioniceClass, level)) {
+                clearFailure(rule.ruleId, QStringLiteral("ionice"));
                 const QString msg = QStringLiteral("[Rule:%1] ionice class=%2 level=%3 → %4(%5)")
                     .arg(rule.name).arg(*rule.ioniceClass).arg(level).arg(procName).arg(pid);
                 log(msg); actions << msg;
             } else {
                 warnOnce(rule, pid, procName,
                          QStringLiteral("I/O priority class %1 level %2")
-                             .arg(*rule.ioniceClass).arg(level), errno);
+                             .arg(*rule.ioniceClass).arg(level), errno,
+                         QStringLiteral("ionice"));
             }
         }
     }
@@ -260,7 +329,8 @@ QHash<QString, QStringList> RuleEngine::shadowedAttributes() const
     for (const auto &r : m_rules) {
         if (!r.enabled || r.pattern.isEmpty()) continue;
         // Same pattern AND same match type = the same set of processes.
-        const QString key = r.pattern.toLower() + QChar(u'\u0000') + r.matchType;
+        const QString key = r.pattern.toLower() + QChar(u'\u0000') + r.matchType
+                          + QChar(u'\u0000') + r.matchTarget;
         if (r.affinity) {
             if (haveAffinity.contains(key)) out[r.ruleId] << QStringLiteral("affinity");
             else                            haveAffinity.insert(key);
@@ -277,9 +347,9 @@ QHash<QString, QStringList> RuleEngine::shadowedAttributes() const
     return out;
 }
 
-bool RuleEngine::isPbExempt(const QString &procName) const
+bool RuleEngine::isPbExempt(const QString &procName, const QString &cmdline) const
 {
     for (const auto &rule : m_rules)
-        if (rule.pbExempt.value_or(false) && rule.matches(procName)) return true;
+        if (rule.pbExempt.value_or(false) && rule.matches(procName, cmdline)) return true;
     return false;
 }

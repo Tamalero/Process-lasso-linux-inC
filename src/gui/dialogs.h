@@ -83,6 +83,7 @@ private:
     QLineEdit  *m_nameEdit    = nullptr;
     QLineEdit  *m_patternEdit = nullptr;
     QComboBox  *m_matchCombo  = nullptr;
+    QComboBox  *m_targetCombo = nullptr;
     QCheckBox  *m_affinityCb  = nullptr;
     QLineEdit  *m_affinityDisplay = nullptr;
     QPushButton*m_affinityPickBtn = nullptr;

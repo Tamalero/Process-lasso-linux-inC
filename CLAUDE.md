@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.9**.
+Current version: **1.5.0**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.9). One feature lives off it:
+`main` is the released line (currently 1.5.0). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -766,6 +766,46 @@ both objects merged for nested objects.
 
 ---
 
+## Runtime failures must be visible in the Rules tab (v1.5.0)
+
+A rule that cannot apply a setting used to show a plain "Yes" in Enabled. The Log
+said it was failing; the table said it was fine. Same silence problem as 1.4.1,
+1.4.9 and the stale-display work — **when something does not happen, say so where
+the user is looking**, not only in a log they may never open.
+
+`RuleEngine` keeps `ruleId → { "affinity"|"nice"|"ionice" → reason }`:
+- `noteFailure()` on every failure path, `clearFailure()` on every success path
+  **and on the already-correct path** — otherwise a rule that starts working again
+  stays marked failing forever.
+- Guarded by its own `m_failMux`: written on the monitor thread, read on the GUI
+  thread. ⚠️ `RuleEngine` otherwise has no mutex; do not read the rest of it from
+  the GUI thread on the strength of this one.
+- `failureGeneration()` bumps only when the map actually changes.
+  `MainWindow::onSnapshot()` repaints the Rules tab only when it moves — rebuilding
+  every snapshot flickers and drops the selection; never rebuilding means a rule
+  that has begun failing still looks healthy.
+
+## Matching by command line (v1.5.0)
+
+`Rule::matchTarget` — `"name"` (default) or `"cmdline"`, JSON key `match_target`.
+`Rule::matches(procName, cmdline)` picks the subject; everything else (contains /
+exact / regex) is unchanged.
+
+Why: several processes routinely share one name — a dozen `python3.13`
+interpreters, every Electron app called `node` — and a name rule cannot tell them
+apart. The command line can: `python3.13 ./ComfyUI/main.py --listen --port 8188`.
+
+- **Every caller must pass the cmdline.** `applyToProcess()` and `isPbExempt()`
+  take it as a defaulted argument, so a missed call site compiles fine and
+  silently stops cmdline rules working. Call sites: `ProcessMonitor::run()`,
+  `applyNewPid()`, `reapplyAllDefaults()`, `ProcessTableWidget::countMatching()`.
+- A cmdline rule with an empty cmdline **does not match** (kernel threads have no
+  cmdline) rather than falling back to the name — falling back would silently
+  widen the rule to everything sharing that name, which is what it exists to avoid.
+- `shadowedAttributes()` keys on pattern + matchType **+ matchTarget**: a name rule
+  and a cmdline rule with the same pattern target different processes.
+- Rules saved before 1.5.0 have no `match_target`, default `"name"` — unchanged.
+
 ## Rule struct
 
 ```cpp
@@ -1095,8 +1135,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.9-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.9-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.5.0-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.5.0-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

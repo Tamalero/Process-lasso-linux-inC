@@ -83,7 +83,7 @@ void ProcessMonitor::applyNewPid(const ProcessInfo &info)
     // Original affinity is still recorded so Reset All Changes keeps working.
     captureOriginal(info.pid);
     { QMutexLocker lk(&m_configMux); if (m_safeMode) return; }
-    const auto actions = m_ruleEngine->applyToProcess(info.pid, info.name);
+    const auto actions = m_ruleEngine->applyToProcess(info.pid, info.name, info.cmdline);
     if (!actions.isEmpty()) {
         if (m_gamingMode && m_gamingNice && !m_gamingNiced.contains(info.pid)) {
             if (CpuPark::setProcessNiceViaHelper(info.pid, -1)) {
@@ -143,7 +143,7 @@ void ProcessMonitor::reapplyAllDefaults()
         if (comm.isEmpty()) continue;
         const auto cmdline = readCmdline(pid);
         const QString name = Utils::resolveName(comm, cmdline);
-        const auto actions = m_ruleEngine->applyToProcess(pid, name);
+        const auto actions = m_ruleEngine->applyToProcess(pid, name, cmdline.join(QLatin1Char(' ')));
         if (actions.isEmpty() && Utils::setAffinity(pid, def))
             emitLog(QStringLiteral("[Default] affinity=%1 → %2(%3)").arg(def, name).arg(pid));
     }
@@ -436,7 +436,7 @@ void ProcessMonitor::run()
                 int matched = 0, acted = 0, skipped = 0;
                 for (const auto &info : snapshot) {
                     if (overridden.contains(info.pid)) { ++skipped; continue; }
-                    const QStringList actions = m_ruleEngine->applyToProcess(info.pid, info.name);
+                    const QStringList actions = m_ruleEngine->applyToProcess(info.pid, info.name, info.cmdline);
                     if (!actions.isEmpty()) { ++matched; acted += actions.size(); }
                 }
                 if (forced) {
@@ -487,7 +487,7 @@ void ProcessMonitor::run()
                 { QMutexLocker lk(&m_configMux); sessionPats = m_pbSessionExempt; }
                 QSet<int> pbExempt;
                 for (const auto &proc : snapshot) {
-                    if (m_ruleEngine->isPbExempt(proc.name)
+                    if (m_ruleEngine->isPbExempt(proc.name, proc.cmdline)
                      || ProBalance::nameMatchesAny(proc.name, sessionPats))
                         pbExempt.insert(proc.pid);
                 }

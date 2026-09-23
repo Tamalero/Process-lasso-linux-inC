@@ -2,6 +2,46 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.5.0] — 2026-09-23
+
+### Added — rules can match the command line, not just the process name
+
+Several processes routinely share a name: a dozen `python3.13` interpreters, or
+every Electron app called `node`. A rule on the name hits all of them.
+
+Rules now have a **Match against** setting — *Process name* (the default, and
+what every existing rule keeps doing) or *Command line*. So a rule can target
+`ComfyUI/main.py` and leave every other python alone. Command-line rules are
+marked `(cmdline)` in the Match column.
+
+### Added — the Rules tab shows rules that are failing
+
+A rule whose setting could not be applied still showed a plain "Yes" in the
+Enabled column. The Log said it was failing; the Rules tab said it was fine.
+
+A rule that is failing now reads **⚠ Failing**, and the specific setting that
+cannot be applied is shown in red with a tooltip giving the reason and the
+process involved — "the process belongs to root", "every one of those CPUs is
+parked", "the privileged helper is not installed". The mark clears by itself as
+soon as the rule applies successfully again.
+
+The table repaints only when a rule starts or stops failing, so nothing flickers
+and selections are not lost.
+
+### Fixed — a priority failure claimed it was about CPU affinity
+
+"Changing another user's **CPU affinity** needs root" was printed for *priority*
+failures too, because the explanation was shared with the affinity path. It no
+longer names the wrong operation.
+
+### Fixed — priority was never applied through the privileged helper
+
+Affinity escalated to the helper when a rule was granted permission, but priority
+never did — despite the helper having had `renice-pid` from the beginning. So a
+rule could set affinity on a root-owned process and then silently fail to set its
+priority. Both now take the same route, and the escalation prompt names the
+action it is asking about rather than always saying "affinity".
+
 ## [1.4.9] — 2026-09-23
 
 ### Fixed — editing a rule could silently throw the change away

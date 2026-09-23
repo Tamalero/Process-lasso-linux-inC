@@ -1,5 +1,6 @@
 #pragma once
 #include <QHash>
+#include <QMutex>
 #include <QSet>
 #include <QList>
 #include <QJsonObject>
@@ -14,6 +15,11 @@ struct Rule {
     QString  name;
     QString  pattern;
     QString  matchType  = QStringLiteral("contains"); // "contains"|"exact"|"regex"
+    // What the pattern is tested against. "name" is the process name (the
+    // default, and what every rule before 1.5.0 used); "cmdline" is the full
+    // command line, which is the only way to tell apart several processes that
+    // share a name — a dozen python3.13 interpreters, say.
+    QString  matchTarget = QStringLiteral("name");    // "name"|"cmdline"
     std::optional<QString> affinity;
     std::optional<int>     nice;
     std::optional<int>     ioniceClass;
@@ -25,7 +31,8 @@ struct Rule {
     std::optional<bool>    allowHelper;
     bool     enabled    = true;
 
-    bool matches(const QString &procName) const;
+    // cmdline may be empty; a "cmdline" rule simply will not match then.
+    bool matches(const QString &procName, const QString &cmdline = QString()) const;
 
     QJsonObject toJson() const;
     static Rule fromJson(const QJsonObject &obj);
@@ -56,7 +63,19 @@ public:
     void updateRule(const Rule &rule);
 
     // Returns list of action strings for each applied action; empty = no rule matched.
-    QStringList applyToProcess(int pid, const QString &procName);
+    QStringList applyToProcess(int pid, const QString &procName, const QString &cmdline = QString());
+
+    // Attributes a rule is currently FAILING to apply at runtime, as
+    // ruleId → { "affinity"|"nice"|"ionice" → human reason }. The Rules tab
+    // marks these, because a rule that cannot apply its setting otherwise looks
+    // identical to one that is working.
+    //
+    // Guarded by its own mutex: written on the monitor thread during
+    // applyToProcess(), read on the GUI thread when the table repaints.
+    QHash<QString, QHash<QString, QString>> ruleFailures() const;
+    // Bumped whenever that map changes, so the GUI can repaint only when there
+    // is something new to show instead of rebuilding the table every snapshot.
+    quint64 failureGeneration() const;
 
     // Attributes that can never take effect because an earlier enabled rule with
     // the SAME pattern and match type already claims them. ruleId → field names.
@@ -65,7 +84,7 @@ public:
     QHash<QString, QStringList> shadowedAttributes() const;
 
     // Returns true if any enabled rule with pbExempt=true matches procName.
-    bool isPbExempt(const QString &procName) const;
+    bool isPbExempt(const QString &procName, const QString &cmdline = QString()) const;
 
 private:
     QList<Rule> m_rules;
@@ -83,5 +102,11 @@ private:
 
     void log(const QString &msg);
     void warnOnce(const Rule &rule, int pid, const QString &procName,
-                  const QString &what, int err);
+                  const QString &what, int err, const QString &attr);
+    void noteFailure(const QString &ruleId, const QString &attr, const QString &reason);
+    void clearFailure(const QString &ruleId, const QString &attr);
+
+    mutable QMutex m_failMux;
+    QHash<QString, QHash<QString, QString>> m_ruleFailures;
+    quint64 m_failGen = 0;
 };

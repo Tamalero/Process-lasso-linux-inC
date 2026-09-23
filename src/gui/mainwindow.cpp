@@ -571,6 +571,15 @@ void MainWindow::onSnapshot(const QList<ProcessInfo> &snapshot)
     // refresh behind. (The exempt patterns are pushed on change, not per frame.)
     m_procTable->updateThrottled(m_proBalance->throttledPids());
     m_procTable->updateSnapshot(snapshot);
+
+    // Repaint the Rules tab only when a rule starts or stops failing. Rebuilding
+    // it every snapshot would flicker and drop the selection; never rebuilding
+    // it means a rule that has begun failing still looks fine.
+    const quint64 gen = m_ruleEngine.failureGeneration();
+    if (gen != m_lastRuleFailureGen) {
+        m_lastRuleFailureGen = gen;
+        if (m_rulesEditor) m_rulesEditor->refresh();
+    }
     statusBar()->showMessage(
         QStringLiteral("%1 processes").arg(snapshot.size()));
 }
@@ -789,18 +798,18 @@ void MainWindow::onAffinityEscalationNeeded(QString ruleId, QString ruleName, in
     QMessageBox box(this);
     box.setIcon(QMessageBox::Question);
     box.setWindowTitle(QStringLiteral("Root needed to apply this rule"));
-    box.setText(QStringLiteral("<b>%1</b> cannot set affinity on <b>%2</b> (%3).")
-                    .arg(ruleName, procName).arg(pid));
+    box.setText(QStringLiteral("<b>%1</b> cannot apply <b>%2</b> to <b>%3</b> (%4).")
+                    .arg(ruleName, cpulist, procName).arg(pid));
     box.setInformativeText(
         QStringLiteral("That process belongs to <b>%1</b>, and changing another "
                        "user's CPU affinity needs root.<br><br>"
-                       "Apply <b>%2</b> using the privileged helper?<br><br>"
+                       "Apply it using the privileged helper?<br><br>"
                        "<small>The helper runs as root. It can change CPU affinity, "
                        "priority and CPU parking — it cannot run other programs. "
                        "Declining leaves this rule's affinity unapplied for "
                        "processes you do not own; the rest of the rule still "
                        "works.</small>")
-            .arg(owner, cpulist));
+            .arg(owner));
     auto *remember = new QCheckBox(QStringLiteral("Remember this choice for this rule"), &box);
     box.setCheckBox(remember);
     auto *useBtn  = box.addButton(QStringLiteral("Use helper"), QMessageBox::AcceptRole);

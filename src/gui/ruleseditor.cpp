@@ -65,13 +65,20 @@ RulesEditor::RulesEditor(RuleEngine *engine, QWidget *parent)
 void RulesEditor::refresh()
 {
     const auto &rules = m_engine->rules();
-    const auto shadow = m_engine->shadowedAttributes();
+    const auto shadow   = m_engine->shadowedAttributes();
+    const auto failures = m_engine->ruleFailures();
     m_table->setRowCount(rules.size());
     for (int row = 0; row < rules.size(); ++row) {
         const auto &r = rules[row];
+        const QHash<QString, QString> failed = failures.value(r.ruleId);
         const QStringList cells = {
-            r.enabled ? QStringLiteral("Yes") : QStringLiteral("No"),
-            r.name, r.pattern, r.matchType,
+            r.enabled ? (failed.isEmpty() ? QStringLiteral("Yes")
+                                          : QStringLiteral("⚠ Failing"))
+                      : QStringLiteral("No"),
+            r.name, r.pattern,
+            r.matchTarget == QLatin1String("cmdline")
+                ? QStringLiteral("%1 (cmdline)").arg(r.matchType)
+                : r.matchType,
             r.affinity.value_or(QString{}),
             r.nice ? QString::number(*r.nice) : QString{},
             r.ioniceClass ? QString::number(*r.ioniceClass) : QString{},
@@ -89,6 +96,27 @@ void RulesEditor::refresh()
                 (col == 4 && shadowed.contains(QStringLiteral("affinity")))
              || (col == 5 && shadowed.contains(QStringLiteral("nice")))
              || ((col == 6 || col == 7) && shadowed.contains(QStringLiteral("I/O priority")));
+            // A setting the rule cannot actually apply — root-owned process,
+            // parked CPUs, no helper. The rule looked perfectly healthy here
+            // while failing on every pass, which is exactly the kind of silence
+            // this app keeps getting wrong.
+            const QString failAttr =
+                  (col == 4) ? QStringLiteral("affinity")
+                : (col == 5) ? QStringLiteral("nice")
+                : (col == 6 || col == 7) ? QStringLiteral("ionice") : QString();
+            const QString failReason =
+                failAttr.isEmpty() ? QString() : failed.value(failAttr);
+            if (!failReason.isEmpty() && (col == 0 || !cells[col].isEmpty())) {
+                item->setForeground(QColor(QStringLiteral("#f38ba8")));
+                item->setToolTip(QStringLiteral("Not being applied: %1").arg(failReason));
+            }
+            if (col == 0 && !failed.isEmpty()) {
+                QStringList why;
+                for (auto it = failed.constBegin(); it != failed.constEnd(); ++it)
+                    why << it.value();
+                item->setForeground(QColor(QStringLiteral("#f38ba8")));
+                item->setToolTip(why.join(QStringLiteral("\n")));
+            }
             if (dead && !cells[col].isEmpty()) {
                 QFont f = item->font();
                 f.setStrikeOut(true);

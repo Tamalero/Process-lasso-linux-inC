@@ -117,7 +117,7 @@ int ProcessTableWidget::countMatching(const Rule &rule) const
 {
     int n = 0;
     for (const auto &p : m_snapshot)
-        if (rule.matches(p.name)) ++n;
+        if (rule.matches(p.name, p.cmdline)) ++n;
     return n;
 }
 

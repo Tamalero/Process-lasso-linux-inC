@@ -4,6 +4,28 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.2
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Edit a rule without leaving the Processes tab.** If a rule already covers the
+process you are editing, a 30-second grace period only delays the inevitable —
+the rule wins, and you have to go to the Rules tab to change it properly. Tick
+**Overwrite matching rules** next to the filter box and the app offers to change
+the rule itself. You are always asked first, and told how many running processes
+that rule affects.
+
+**Manual changes show up immediately, and the dialogs tell the truth.** The
+context-menu dialogs were seeded from the process table, which lags by a couple
+of seconds — so reopening one showed the value from *before* your change and made
+it look like nothing had happened. They now read live values, and the edited row
+repaints at once. The I/O priority dialog was also hardcoded to "class 2, level
+4" and never showed what a process was actually set to.
+
+**Manual priority and I/O priority changes are no longer reverted instantly.**
+Only affinity was being protected from rule re-enforcement; the other two were
+overwritten about half a second later.
+
 ## What's New in 1.4.1
 
 Full history in [CHANGELOG.md](CHANGELOG.md).
@@ -339,7 +361,11 @@ The main live view of all running processes.
 
 **Keyboard shortcut:** `Delete` or `Backspace` on a selected row sends SIGTERM to the selected process(es).
 
-**Manual affinity protection:** When you manually change a process's affinity from the context menu, the monitor suppresses rule re-enforcement for that PID for 30 seconds, so your manual change is not immediately overwritten.
+**Manual change protection:** When you set affinity, priority or I/O priority from the context menu, the monitor suppresses rule re-enforcement for that PID for 30 seconds, so your change is not immediately overwritten.
+
+**Overwrite matching rules:** If a rule already covers the process you are editing, 30 seconds only delays the inevitable — the rule wins in the end, and you have to go to the Rules tab to change it properly. Tick **Overwrite matching rules** next to the filter box and the app offers to change the rule itself instead, without leaving the Processes tab.
+
+You are always asked first, and the prompt tells you which rule and **how many running processes it affects** — a rule applies to every process matching its pattern, so editing one from a single row can repoint a browser's entire process tree. Choosing *Just this process* keeps your change on that one PID for as long as it lives and leaves the rule alone. The setting is off by default (`ui.overwrite_matching_rules`).
 
 **ProBalance exemption note:** Both scopes exempt by **name**, not by PID — so exempting `firefox` covers all of its child processes, not just the one you right-clicked. The two ticks are independent and show the current state, so you can see at a glance whether a process is exempt and for how long.
 

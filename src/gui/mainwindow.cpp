@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QScrollBar>
@@ -22,6 +23,7 @@
 #include <QStatusBar>
 #include <QTime>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <utility>   // std::as_const
 
 // ---------- helpers ----------
@@ -188,6 +190,25 @@ void MainWindow::buildUi()
         auto *filterEdit = new QLineEdit(w);
         filterEdit->setPlaceholderText(QStringLiteral("name or PID…"));
         filterRow->addWidget(filterEdit, 1);
+
+        m_overwriteRulesCb = new QCheckBox(QStringLiteral("Overwrite matching rules"), w);
+        m_overwriteRulesCb->setChecked(
+            m_config[QStringLiteral("ui")].toObject()
+                [QStringLiteral("overwrite_matching_rules")].toBool(false));
+        m_overwriteRulesCb->setToolTip(QStringLiteral(
+            "When you set affinity, priority or I/O priority on a process that an "
+            "existing rule already covers, offer to change the rule itself instead "
+            "of having the rule revert you a moment later.\n\n"
+            "You are always asked before a rule is changed — a rule applies to every "
+            "process matching its pattern, not just the one you clicked."));
+        connect(m_overwriteRulesCb, &QCheckBox::toggled, this, [this](bool on){
+            QJsonObject ui = m_config[QStringLiteral("ui")].toObject();
+            ui[QStringLiteral("overwrite_matching_rules")] = on;
+            m_config[QStringLiteral("ui")] = ui;
+            saveConfig();
+        });
+        filterRow->addWidget(m_overwriteRulesCb);
+
         vl->addLayout(filterRow);
 
         m_procTable = new ProcessTableWidget(&m_ruleEngine,
@@ -196,8 +217,8 @@ void MainWindow::buildUi()
 
         connect(filterEdit, &QLineEdit::textChanged,
                 m_procTable, &ProcessTableWidget::setFilter);
-        connect(m_procTable, &ProcessTableWidget::affinityManuallyChanged,
-                this, &MainWindow::onAffinityManualChange);
+        connect(m_procTable, &ProcessTableWidget::manualChangeApplied,
+                this, &MainWindow::onManualChange);
         connect(m_procTable, &ProcessTableWidget::ruleAddRequested,
                 this, &MainWindow::onRuleAddFromTable);
         connect(m_procTable, &ProcessTableWidget::pbExemptPermanentToggled,
@@ -595,9 +616,84 @@ void MainWindow::onRulesChanged()
     m_monitor->reapplyAllDefaults();
 }
 
-void MainWindow::onAffinityManualChange(int pid)
+void MainWindow::onManualChange(ManualChange c)
 {
-    m_monitor->setManualAffinityOverride(pid, 30.0);
+    // Which enabled rules both match this process AND set the same attribute to
+    // something else? Only those would revert the change the user just made.
+    QList<Rule> conflicting;
+    for (const auto &r : m_ruleEngine.rules()) {
+        if (!r.enabled || !r.matches(c.name)) continue;
+        if (c.affinity && r.affinity && *r.affinity != *c.affinity)            conflicting << r;
+        else if (c.nice && r.nice && *r.nice != *c.nice)                        conflicting << r;
+        else if (c.ioniceClass && r.ioniceClass
+                 && (*r.ioniceClass != *c.ioniceClass
+                     || r.ioniceLevel.value_or(0) != c.ioniceLevel.value_or(0))) conflicting << r;
+    }
+
+    // Nothing would fight the change, or the user has not opted in: keep the old
+    // behaviour and simply hold the rules off this pid for a while.
+    if (conflicting.isEmpty() || !m_overwriteRulesCb || !m_overwriteRulesCb->isChecked()) {
+        m_monitor->setManualOverride(c.pid, 30.0);
+        return;
+    }
+
+    int affected = 0;
+    QStringList names;
+    for (const auto &r : conflicting) {
+        names << r.name;
+        affected = std::max(affected, m_procTable->countMatching(r));
+    }
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QStringLiteral("Change the rule?"));
+    box.setText(QStringLiteral("<b>%1</b> already sets %2 for processes matching it.")
+                    .arg(names.join(QStringLiteral("</b>, <b>")), c.field));
+    box.setInformativeText(
+        QStringLiteral("Change %1 to <b>%2</b> in %3?<br><br>"
+                       "This is saved to your configuration and applies to "
+                       "<b>%4 running process%5</b> matching the pattern, not just "
+                       "%6 (%7).")
+            .arg(names.size() == 1 ? QStringLiteral("it") : QStringLiteral("them"),
+                 c.display,
+                 names.size() == 1 ? QStringLiteral("the rule") : QStringLiteral("those rules"))
+            .arg(affected)
+            .arg(affected == 1 ? QString() : QStringLiteral("es"))
+            .arg(c.name).arg(c.pid));
+    auto *changeBtn = box.addButton(QStringLiteral("Change rule"), QMessageBox::AcceptRole);
+    auto *onceBtn   = box.addButton(QStringLiteral("Just this process"), QMessageBox::RejectRole);
+    box.setDefaultButton(onceBtn);
+    box.exec();
+
+    if (box.clickedButton() != changeBtn) {
+        // Keep it to this pid; the rule still owns everything else.
+        // Indefinite, not 30 seconds: the user was asked and said "this one",
+        // so the rule must stop fighting them for as long as the process lives.
+        m_monitor->setManualOverride(c.pid, 0.0);
+        appendLog(QStringLiteral("%1(%2): %3 kept for this process only — rule "
+                                 "unchanged, enforcement suppressed for this pid")
+                      .arg(c.name).arg(c.pid).arg(c.field));
+        return;
+    }
+
+    for (auto r : conflicting) {
+        const QString before = c.affinity ? r.affinity.value_or(QString())
+                            : c.nice     ? QString::number(r.nice.value_or(0))
+                                         : QStringLiteral("class %1 level %2")
+                                               .arg(r.ioniceClass.value_or(0))
+                                               .arg(r.ioniceLevel.value_or(0));
+        if (c.affinity)         r.affinity = *c.affinity;
+        else if (c.nice)        r.nice     = *c.nice;
+        else if (c.ioniceClass) { r.ioniceClass = *c.ioniceClass; r.ioniceLevel = c.ioniceLevel.value_or(0); }
+        m_ruleEngine.updateRule(r);
+        appendLog(QStringLiteral("[Rule:%1] %2 %3 → %4 (edited from the Processes tab)")
+                      .arg(r.name, c.field, before, c.display));
+    }
+    m_rulesEditor->refresh();
+    saveConfig();
+    // No manual override: the rule now agrees with what the user asked for, so
+    // the next enforcement pass is a no-op for this pid and applies the new
+    // value to its siblings.
 }
 
 void MainWindow::onRuleAddFromTable(Rule rule)

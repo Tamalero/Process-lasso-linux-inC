@@ -41,6 +41,9 @@ QJsonObject defaultConfig()
     ui[QStringLiteral("start_minimized")]  = false;
     ui[QStringLiteral("use_system_theme")] = false;
     ui[QStringLiteral("opacity")]          = 100;
+    // Processes tab → "Overwrite matching rules". Off by default: it edits
+    // saved rules, so it is opt-in.
+    ui[QStringLiteral("overwrite_matching_rules")] = false;
 
     QJsonObject root;
     root[QStringLiteral("version")]     = 1;

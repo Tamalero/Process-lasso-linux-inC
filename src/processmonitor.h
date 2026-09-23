@@ -22,7 +22,10 @@ public:
     void reapplyAllDefaults();
     void resetAllAffinities();
     void setGamingMode(bool active, bool elevateNice);
-    void setManualAffinityOverride(int pid, double durationSeconds = 30.0);
+    // Suppress ALL rule enforcement for one pid (affinity, nice and ionice —
+    // the enforcement loop skips the whole applyToProcess call). A duration of
+    // 0 means indefinite: until the process exits or the override is cleared.
+    void setManualOverride(int pid, double durationSeconds = 30.0);
     // ProBalance exemptions that last only for this run — same name-pattern
     // matching as the persisted list, but owned by MainWindow, not config.json.
     void setSessionExemptPatterns(const QStringList &patterns);

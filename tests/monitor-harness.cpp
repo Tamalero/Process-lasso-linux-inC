@@ -76,7 +76,7 @@ int main(int argc, char **argv)
     //    from another thread with no lock, so the monitor could miss it and
     //    revert the change on the very next pass.
     Utils::setAffinity(probe, QStringLiteral("0-31"));
-    mon.setManualAffinityOverride(probe, 4.0);
+    mon.setManualOverride(probe, 4.0);
     bool held = true;
     for (int i = 0; i < 25; ++i) {           // 2.5 s, i.e. ~5 enforcement passes
         QThread::msleep(100);
@@ -91,6 +91,16 @@ int main(int argc, char **argv)
         if (affOf(probe) == QStringLiteral("2-5")) { reverted = true; break; }
     }
     check(reverted, "rule reclaims the process after the override expires");
+
+    // 4. an INDEFINITE override (duration 0) must not expire on its own.
+    Utils::setAffinity(probe, QStringLiteral("0-31"));
+    mon.setManualOverride(probe, 0.0);
+    bool stillHeld = true;
+    for (int i = 0; i < 40; ++i) {          // 4 s, well past the 30 s timer's granularity
+        QThread::msleep(100);
+        if (affOf(probe) != QStringLiteral("0-31")) { stillHeld = false; break; }
+    }
+    check(stillHeld, "indefinite override is not reclaimed by the rule");
 
     mon.stop(); mon.wait(3000);
     kill(probe, SIGKILL); int st = 0; waitpid(probe, &st, 0);

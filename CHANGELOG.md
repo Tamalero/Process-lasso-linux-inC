@@ -2,6 +2,53 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.2] — 2026-09-23
+
+### Added — edit a rule without leaving the Processes tab
+
+New **Overwrite matching rules** checkbox beside the Processes tab filter box
+(off by default, `ui.overwrite_matching_rules`).
+
+Setting affinity, priority or I/O priority on a process that an existing rule
+already covers used to be futile: the rule reclaimed it 30 seconds later and the
+only real fix was a trip to the Rules tab. With the toggle on, the app offers to
+change the rule itself instead.
+
+You are always asked first, and the prompt names the rule and **how many running
+processes it affects** — a rule covers every process matching its pattern, so
+editing one from a single row can repoint a browser's whole process tree.
+Choosing *Just this process* keeps your change on that one PID for as long as it
+lives and leaves the rule untouched.
+
+### Fixed — manual changes that looked like they were being reverted
+
+They were not. The value reached the kernel every time; the screen was stale.
+
+- All three context-menu dialogs were seeded from the **table cell** rather than
+  from `/proc`, so reopening one showed the value from before your change — up
+  to two seconds old, or indefinitely old while the GUI thread was starved by
+  the log flood fixed in 1.4.1. They now read live values.
+- The **I/O priority dialog was hardcoded** to "class 2, level 4". It never
+  showed what the process was actually set to, and silently proposed changing it
+  to that. It now shows the real value.
+- The table waited up to two seconds to show a manual change. The affected row
+  is now re-read and repainted immediately.
+
+### Fixed — nice and I/O priority had no protection at all
+
+Only affinity reported a manual change to the monitor, so a hand-set **nice** or
+**I/O priority** was reverted by a matching rule on the very next enforcement
+pass, about half a second later, with none of the 30-second grace affinity got.
+All three now report.
+
+### Changed
+
+`setManualAffinityOverride` is now `setManualOverride` — it always suppressed the
+whole rule application, not just affinity, and the old name hid that. A duration
+of `0` means indefinite, used by *Just this process*. Overrides are dropped when
+their process exits, so an indefinite one cannot outlive it and catch a recycled
+PID.
+
 ## [1.4.1] — 2026-09-23
 
 ### Fixed — the app became unresponsive, and rules looked like they did nothing

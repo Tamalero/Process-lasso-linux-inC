@@ -61,6 +61,9 @@ private:
     // Session-only ProBalance exemptions: deliberately not in m_config, so
     // saveConfig() cannot leak them into config.json.
     QStringList       m_pbSessionExempt;
+    // Processes tab → "Overwrite matching rules". Persisted so the choice
+    // survives a restart; see config key ui.overwrite_matching_rules.
+    QCheckBox        *m_overwriteRulesCb = nullptr;
     double            m_lastCpuTempC = 0.0;
     bool              m_haveCpuTemp  = false;
 
@@ -80,7 +83,7 @@ private:
     void onCpuForTray(const QList<double> &percpu);
     void onSensors(const SensorSnapshot &sensors);
     void onRulesChanged();
-    void onAffinityManualChange(int pid);
+    void onManualChange(ManualChange change);
     void onRuleAddFromTable(Rule rule);
     void onPbSettingsChanged(QJsonObject pbCfg);
     void onPbExemptPermanentToggle(const QString &name, bool exempt);

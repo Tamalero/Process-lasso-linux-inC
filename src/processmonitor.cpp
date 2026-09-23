@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <limits>
 
 using namespace std::chrono;
 
@@ -171,7 +172,7 @@ void ProcessMonitor::setGamingMode(bool active, bool elevateNice)
     if (!active && !m_gamingNiced.isEmpty()) restoreGamingNices();
 }
 
-void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
+void ProcessMonitor::setManualOverride(int pid, double durationSeconds)
 {
     // Called from the GUI thread; run() prunes and reads this hash every
     // enforceInterval on the monitor thread. Without the lock a concurrent
@@ -180,7 +181,11 @@ void ProcessMonitor::setManualAffinityOverride(int pid, double durationSeconds)
     // which looks exactly like setting affinity doing nothing at all. A QHash
     // insert racing an iteration can also corrupt the container outright.
     QMutexLocker lk(&m_configMux);
-    m_manualOverrides[pid] = (double)nowNs() / 1e9 + durationSeconds;
+    // 0 = indefinite. Stored as infinity so the expiry comparison needs no
+    // special case; run() drops it when the process itself goes away.
+    m_manualOverrides[pid] = durationSeconds <= 0.0
+        ? std::numeric_limits<double>::infinity()
+        : (double)nowNs() / 1e9 + durationSeconds;
 }
 
 void ProcessMonitor::setSessionExemptPatterns(const QStringList &patterns)
@@ -403,7 +408,10 @@ void ProcessMonitor::run()
                 {
                     QMutexLocker lk(&m_configMux);
                     for (auto it = m_manualOverrides.begin(); it != m_manualOverrides.end(); ) {
-                        if (it.value() <= nowD) {
+                        // Drop expired entries, and entries whose process has
+                        // exited — an indefinite override would otherwise sit
+                        // here forever and silently apply to a recycled pid.
+                        if (it.value() <= nowD || !currentPids.contains(it.key())) {
                             it = m_manualOverrides.erase(it);
                         } else {
                             overridden.insert(it.key());

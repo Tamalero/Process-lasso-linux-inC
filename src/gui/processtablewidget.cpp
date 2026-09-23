@@ -94,6 +94,33 @@ void ProcessTableWidget::setPbExemptPatterns(const QStringList &permanent,
     refreshDisplay();
 }
 
+void ProcessTableWidget::refreshRow(int pid)
+{
+    // The snapshot the table draws from is up to display_refresh_interval_ms
+    // old (2 s by default). Leaving a hand-made change invisible for that long
+    // reads as "it was reverted" — and while the GUI thread was starved before
+    // v1.4.1, it read as "it never applied at all". Patch the row now.
+    for (auto &p : m_snapshot) {
+        if (p.pid != pid) continue;
+        p.affinity = Utils::getAffinityStr(pid);
+        int n = 0;
+        if (Utils::getNice(pid, n)) p.nice = n;
+        int cls = 0, lvl = 0;
+        if (Utils::getIoNice(pid, cls, lvl))
+            p.ionice = QStringLiteral("%1/%2").arg(cls).arg(lvl);
+        break;
+    }
+    refreshDisplay();
+}
+
+int ProcessTableWidget::countMatching(const Rule &rule) const
+{
+    int n = 0;
+    for (const auto &p : m_snapshot)
+        if (rule.matches(p.name)) ++n;
+    return n;
+}
+
 void ProcessTableWidget::setFilter(const QString &text)
 {
     m_filter = text.trimmed().toLower();
@@ -272,12 +299,20 @@ void ProcessTableWidget::doKillMany(const QList<RowProc> &procs, bool force)
 
 void ProcessTableWidget::doSetAffinity(const RowProc &p)
 {
-    AffinityDialog dlg(p.affinity, this, p.name);
+    // Seed from the kernel, not from the table cell: the cell can be seconds
+    // stale, so the dialog would open showing a mask the process no longer has.
+    const QString live = Utils::getAffinityStr(p.pid);
+    AffinityDialog dlg(live.isEmpty() ? p.affinity : live, this, p.name);
     if (dlg.exec() == QDialog::Accepted) {
         const QString cpulist = dlg.getCpulist();
         if (Utils::setAffinity(p.pid, cpulist)) {
             if (m_logCb) m_logCb(QStringLiteral("Set affinity=%1 on %2(%3)").arg(cpulist, p.name).arg(p.pid));
-            emit affinityManuallyChanged(p.pid);
+            ManualChange c;
+            c.pid = p.pid; c.name = p.name;
+            c.field = QStringLiteral("affinity"); c.display = cpulist;
+            c.affinity = cpulist;
+            refreshRow(p.pid);
+            emit manualChangeApplied(c);
         } else {
             if (m_logCb) m_logCb(QStringLiteral("Failed to set affinity on %1(%2)").arg(p.name).arg(p.pid));
         }
@@ -286,11 +321,20 @@ void ProcessTableWidget::doSetAffinity(const RowProc &p)
 
 void ProcessTableWidget::doSetNice(const RowProc &p)
 {
-    NicePriorityDialog dlg(p.nice, this, p.name);
+    int liveNice = p.nice;
+    Utils::getNice(p.pid, liveNice);
+    NicePriorityDialog dlg(liveNice, this, p.name);
     if (dlg.exec() == QDialog::Accepted) {
         const int nice = dlg.getNice();
-        if (Utils::setNice(p.pid, nice))
-            { if (m_logCb) m_logCb(QStringLiteral("Set nice=%1 on %2(%3)").arg(nice).arg(p.name).arg(p.pid)); }
+        if (Utils::setNice(p.pid, nice)) {
+            if (m_logCb) m_logCb(QStringLiteral("Set nice=%1 on %2(%3)").arg(nice).arg(p.name).arg(p.pid));
+            ManualChange c;
+            c.pid = p.pid; c.name = p.name;
+            c.field = QStringLiteral("nice"); c.display = QString::number(nice);
+            c.nice = nice;
+            refreshRow(p.pid);
+            emit manualChangeApplied(c);
+        }
         else
             { if (m_logCb) m_logCb(QStringLiteral("Failed to set nice=%1 on %2(%3) (root needed?)").arg(nice).arg(p.name).arg(p.pid)); }
     }
@@ -298,11 +342,23 @@ void ProcessTableWidget::doSetNice(const RowProc &p)
 
 void ProcessTableWidget::doSetIoNice(const RowProc &p)
 {
-    IoNiceDialog dlg(2, 4, this, p.name);
+    // Was hardcoded to class 2 / level 4, so the dialog never showed what the
+    // process was actually set to and silently proposed changing it.
+    int curCls = 2, curLvl = 4;
+    Utils::getIoNice(p.pid, curCls, curLvl);
+    IoNiceDialog dlg(curCls, curLvl, this, p.name);
     if (dlg.exec() == QDialog::Accepted) {
         const int cls = dlg.getIoNiceClass(), lvl = dlg.getIoNiceLevel();
-        if (Utils::setIoNice(p.pid, cls, lvl))
-            { if (m_logCb) m_logCb(QStringLiteral("Set ionice class=%1 level=%2 on %3(%4)").arg(cls).arg(lvl).arg(p.name).arg(p.pid)); }
+        if (Utils::setIoNice(p.pid, cls, lvl)) {
+            if (m_logCb) m_logCb(QStringLiteral("Set ionice class=%1 level=%2 on %3(%4)").arg(cls).arg(lvl).arg(p.name).arg(p.pid));
+            ManualChange c;
+            c.pid = p.pid; c.name = p.name;
+            c.field = QStringLiteral("I/O priority");
+            c.display = QStringLiteral("class %1 level %2").arg(cls).arg(lvl);
+            c.ioniceClass = cls; c.ioniceLevel = lvl;
+            refreshRow(p.pid);
+            emit manualChangeApplied(c);
+        }
         else
             { if (m_logCb) m_logCb(QStringLiteral("Failed to set ionice on %1(%2)").arg(p.name).arg(p.pid)); }
     }

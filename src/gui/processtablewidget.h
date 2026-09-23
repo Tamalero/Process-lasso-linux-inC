@@ -4,6 +4,20 @@
 #include <QTableWidget>
 #include <QSet>
 #include <functional>
+#include <optional>
+
+// A value the user just set by hand from the Processes tab. Exactly one of the
+// optionals is set — whichever attribute the dialog changed.
+struct ManualChange {
+    int     pid = 0;
+    QString name;
+    QString field;      // "affinity" | "nice" | "I/O priority" — for the dialog text
+    QString display;    // the new value, human-readable
+    std::optional<QString> affinity;
+    std::optional<int>     nice;
+    std::optional<int>     ioniceClass;
+    std::optional<int>     ioniceLevel;
+};
 
 class ProcessTableWidget : public QTableWidget {
     Q_OBJECT
@@ -20,10 +34,17 @@ public:
     // agree with each other by construction.
     void setPbExemptPatterns(const QStringList &permanent, const QStringList &session);
     void setFilter(const QString &text);
+    // How many processes in the current snapshot a rule would match.
+    int countMatching(const Rule &rule) const;
+
 
 signals:
     void ruleAddRequested(Rule rule);
-    void affinityManuallyChanged(int pid);
+    // Emitted after any successful manual set. Covers nice and I/O priority as
+    // well as affinity — previously only affinity was reported, so a manual
+    // nice change got no protection at all and a matching rule reverted it on
+    // the next pass, about half a second later.
+    void manualChangeApplied(ManualChange change);
     // Separate signals rather than one with a scope flag: the two exemptions have
     // different lifetimes and different owners (config file vs. this run).
     void pbExemptPermanentToggled(QString name, bool exempt);
@@ -53,6 +74,9 @@ private:
     QString            m_filter;
 
     void refreshDisplay();
+    // Re-read one process's live values from /proc and repaint, instead of
+    // waiting up to display_refresh_interval_ms for the next snapshot.
+    void refreshRow(int pid);
     void updateHeaderLabels();
 
     struct RowProc { int pid; QString name; int nice; QString affinity; QString ionice; };

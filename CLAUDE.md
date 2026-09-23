@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.1**.
+Current version: **1.4.2**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.1). One feature lives off it:
+`main` is the released line (currently 1.4.2). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -252,6 +252,63 @@ to no restriction at all and is harmless.
   same gotcha as `QFile::atEnd()` below. A shell scan using it silently matches
   nothing and looks like a clean result. Read the content and test for emptiness
   instead.
+
+---
+
+## Editing a rule from the Processes tab (v1.4.2)
+
+Checkbox in the Processes tab filter row, **"Overwrite matching rules"**, config key
+`ui.overwrite_matching_rules` (default **false** — it edits saved rules, so it is
+opt-in). Persisted on toggle, not on Apply.
+
+Every manual setter in `ProcessTableWidget` (affinity, nice **and** I/O priority) now
+emits `manualChangeApplied(ManualChange)`. Before 1.4.2 only affinity emitted
+anything, so a manual nice or ionice change got **no** protection and a matching rule
+reverted it on the next pass, ~500 ms later.
+
+`MainWindow::onManualChange()` decides:
+
+| Situation | Behaviour |
+|---|---|
+| No enabled rule sets that attribute to a different value | 30 s override, nothing to ask about |
+| Conflict, toggle **off** | 30 s override + a log line saying enforcement was suppressed and how to change the rule |
+| Conflict, toggle **on** | Ask: **Change rule** (rewrite + save) or **Just this process** (indefinite override) |
+
+The dialog names the rule and **how many running processes it affects**
+(`ProcessTableWidget::countMatching`) — a rule covers every process matching its
+pattern, so rewriting one from a single row can repoint ~150 of them. Never skip that
+count.
+
+After **Change rule**: `RuleEngine::updateRule()`, `RulesEditor::refresh()`,
+`saveConfig()`, and **no** manual override — the rule now agrees with the user, so the
+next pass is a no-op for that pid and applies the new value to its siblings.
+
+`setManualAffinityOverride` is now **`setManualOverride`**: it always suppressed the
+whole `applyToProcess` call, not just affinity, and the old name hid that. A duration
+of `0` means indefinite (stored as `infinity`), used by "Just this process" — a
+30 s grace there would be absurd after the user was explicitly asked. `run()` drops
+override entries whose pid is no longer in the snapshot, so an indefinite one cannot
+outlive its process and catch a recycled pid.
+
+### The "manual change gets rolled back" report — resolved, it was never a rollback
+
+Chased across several rounds in Sept 2026 and worth not re-chasing. A manual affinity
+change *appeared* to be reverted instantly. It never was: the value reached the kernel
+every time. The **display** was stale, for two compounding reasons.
+
+1. Until 1.4.1 the rule-enforcement log flood starved the GUI thread, so the Processes
+   table stopped repainting **entirely**. The old mask stayed on screen indefinitely.
+2. Even with a healthy GUI, the table lags by `display_refresh_interval_ms` (2 s), and
+   all three context-menu dialogs were seeded from the **table cell** rather than from
+   `/proc` — so reopening one showed the pre-change value and confirmed the illusion.
+
+Fixed in 1.4.2: dialogs read live values, and `ProcessTableWidget::refreshRow()`
+re-reads that one process and repaints immediately after a successful change.
+
+**The lesson:** when this app "ignores" an action, suspect the *display* before the
+mechanism. `tests/monitor-harness.cpp` exercises the real override path headlessly and
+passed throughout — that disagreement between a passing test and a user's screen was
+the clue, and it was read as "cannot reproduce" for too long.
 
 ---
 
@@ -801,8 +858,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.1-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.1-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.2-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.2-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -948,7 +1005,7 @@ ProcessMonitor::cpuSnapshotReady      → CpuHistoryWidget::updateCpu
 ProcessMonitor::logMessage            → MainWindow::appendLog
 RulesEditor::rulesChanged             → MainWindow::onRulesChanged
 ProcessTableWidget::ruleAddRequested  → MainWindow::onRuleAddFromTable
-ProcessTableWidget::affinityManually  → MainWindow::onAffinityManualChange
+ProcessTableWidget::manualChangeApplied → MainWindow::onManualChange
 ProcessTableWidget::pbExemptSessionToggled   → MainWindow::onPbExemptSessionToggle
 ProcessTableWidget::pbExemptPermanentToggled → MainWindow::onPbExemptPermanentToggle
 ProBalanceTab::settingsChanged        → MainWindow::onPbSettingsChanged

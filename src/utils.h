@@ -9,7 +9,14 @@ QSet<int>  cpulistToSet(const QString &cpulist);
 QString    cpusetToCpulist(const QSet<int> &cpus);
 QList<int> getTids(int pid);
 
-bool    setAffinity(int pid, const QString &cpulist);
+// errnoOut, when given, receives 0 on success or the first failing errno.
+// "Failed to set affinity" on its own is useless: EPERM (someone else's
+// process), EINVAL (every requested CPU parked) and ESRCH (it exited a
+// microsecond ago) are three completely different situations.
+bool    setAffinity(int pid, const QString &cpulist, int *errnoOut = nullptr);
+// Plain-language explanation of a setAffinity failure, naming the owner when
+// the problem is ownership.
+QString describeAffinityError(int err, int pid);
 QString getAffinityStr(int pid);
 
 bool setNice(int pid, int nice);

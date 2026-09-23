@@ -1,4 +1,5 @@
 #include "ruleengine.h"
+#include "cpupark.h"
 #include <QSet>
 #include "utils.h"
 #include "cputopology.h"
@@ -33,6 +34,7 @@ QJsonObject Rule::toJson() const
     obj[QStringLiteral("ionice_class")]= ioniceClass ? QJsonValue(*ioniceClass) : QJsonValue::Null;
     obj[QStringLiteral("ionice_level")]= ioniceLevel ? QJsonValue(*ioniceLevel) : QJsonValue::Null;
     obj[QStringLiteral("pb_exempt")]   = pbExempt   ? QJsonValue(*pbExempt)    : QJsonValue::Null;
+    obj[QStringLiteral("allow_helper")]= allowHelper? QJsonValue(*allowHelper) : QJsonValue::Null;
     obj[QStringLiteral("enabled")]     = enabled;
     return obj;
 }
@@ -55,6 +57,8 @@ Rule Rule::fromJson(const QJsonObject &obj)
     if (!iol.isNull() && iol.isDouble()) r.ioniceLevel = iol.toInt();
     const auto pbe = obj[QStringLiteral("pb_exempt")];
     if (!pbe.isNull() && pbe.isBool()) r.pbExempt = pbe.toBool();
+    const auto ah = obj[QStringLiteral("allow_helper")];
+    if (!ah.isNull() && ah.isBool()) r.allowHelper = ah.toBool();
     return r;
 }
 
@@ -121,9 +125,10 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
             // So: read first, and do nothing at all when nothing needs doing.
             const QSet<int> want = Utils::cpulistToSet(*rule.affinity);
             const QSet<int> have = Utils::cpulistToSet(Utils::getAffinityStr(pid));
+            int setErr = 0;
             if (!have.isEmpty() && have == want) {
                 // Already correct. No syscall, no log line.
-            } else if (Utils::setAffinity(pid, *rule.affinity)) {
+            } else if (Utils::setAffinity(pid, *rule.affinity, &setErr)) {
                 const QString msg = QStringLiteral("[Rule:%1] affinity=%2 → %3(%4)")
                     .arg(rule.name, *rule.affinity, procName).arg(pid);
                 log(msg); actions << msg;
@@ -135,13 +140,49 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName)
                 // requested CPU is offline, which is exactly what Gaming Mode
                 // does. Deduped on (requested, parked) so the enforcement loop
                 // does not repeat it twice a second.
-                const QSet<int> want    = Utils::cpulistToSet(*rule.affinity);
                 const QSet<int> offline = getOfflineCpuSet();
+                // A permission failure is permanent, actionable, and repeats on
+                // every pass — report it exactly once per rule+process.
+                if (setErr == EPERM) {
+                    const QString key = rule.ruleId + QLatin1Char('|') + QString::number(pid);
+                    const bool mayEscalate = rule.allowHelper.value_or(false)
+                                          || m_sessionHelper.contains(rule.ruleId);
+                    if (mayEscalate) {
+                        if (CpuPark::setAffinityViaHelper(pid, *rule.affinity)) {
+                            // Next pass sees the value already correct and stays
+                            // silent, so this logs once per actual change.
+                            const QString msg =
+                                QStringLiteral("[Rule:%1] affinity=%2 → %3(%4) (via privileged helper)")
+                                    .arg(rule.name, *rule.affinity, procName).arg(pid);
+                            log(msg); actions << msg;
+                            m_permWarned.remove(key);
+                        } else if (!m_permWarned.contains(key)) {
+                            if (m_permWarned.size() > 2048) m_permWarned.clear();
+                            m_permWarned.insert(key);
+                            log(QStringLiteral("[Rule:%1] affinity=%2 NOT applied to %3(%4) — "
+                                               "the privileged helper failed or is not installed "
+                                               "(Gaming Mode tab → install helper).")
+                                    .arg(rule.name, *rule.affinity, procName).arg(pid));
+                        }
+                    } else if (m_escalationCb && !m_escalationAsked.contains(rule.ruleId)) {
+                        // Ask once per rule per session, never once per pid: a
+                        // rule matching a browser would otherwise open 150 dialogs.
+                        m_escalationAsked.insert(rule.ruleId);
+                        m_escalationCb(rule.ruleId, rule.name, pid, procName, *rule.affinity);
+                    } else if (!m_permWarned.contains(key)) {
+                        if (m_permWarned.size() > 2048) m_permWarned.clear();
+                        m_permWarned.insert(key);
+                        log(QStringLiteral("[Rule:%1] affinity=%2 NOT applied to %3(%4) — %5")
+                                .arg(rule.name, *rule.affinity, procName)
+                                .arg(pid)
+                                .arg(Utils::describeAffinityError(setErr, pid)));
+                    }
+                }
                 // Only the parked case is worth telling the user about: it is
                 // actionable and cannot interleave with success. Anything else
                 // is almost always ESRCH (the process exited between the
                 // snapshot and the syscall) — noise, not a problem.
-                if (want.isEmpty() || !(want - offline).isEmpty()) {
+                else if (want.isEmpty() || !(want - offline).isEmpty()) {
                     VLOG("rule '%s': affinity '%s' failed for %s (transient)",
                          qPrintable(rule.name), qPrintable(*rule.affinity),
                          qPrintable(procName));

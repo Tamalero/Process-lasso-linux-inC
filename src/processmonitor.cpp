@@ -28,6 +28,10 @@ ProcessMonitor::ProcessMonitor(RuleEngine *re, ProBalance *pb,
     HZ = sysconf(_SC_CLK_TCK);
     re->setLogCallback([this](const QString &m){ emitLog(m); });
     pb->setLogCallback([this](const QString &m){ emitLog(m); });
+    re->setEscalationCallback([this](QString ruleId, QString ruleName, int pid,
+                                     QString procName, QString cpulist){
+        emit affinityEscalationNeeded(ruleId, ruleName, pid, procName, cpulist);
+    });
 }
 
 void ProcessMonitor::emitLog(const QString &msg) { emit logMessage(msg); }

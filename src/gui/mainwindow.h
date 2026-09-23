@@ -84,6 +84,8 @@ private:
     void onSensors(const SensorSnapshot &sensors);
     void onRulesChanged();
     void onManualChange(ManualChange change);
+    void onAffinityEscalationNeeded(QString ruleId, QString ruleName, int pid,
+                                    QString procName, QString cpulist);
     void onRuleAddFromTable(Rule rule);
     void onPbSettingsChanged(QJsonObject pbCfg);
     void onPbExemptPermanentToggle(const QString &name, bool exempt);

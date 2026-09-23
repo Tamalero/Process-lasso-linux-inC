@@ -105,6 +105,40 @@ int main(int argc, char **argv)
         check(re.shadowedAttributes().isEmpty(), "non-overlapping attributes are not shadowed");
     }
 
+    // ── 4. Another user's process: EPERM must be asked about once, not spammed ──
+    //     pid 1 is root-owned, so an unprivileged run gets EPERM from the kernel
+    //     without needing any privilege to set the test up.
+    {
+        RuleEngine re;
+        re.loadRules(QJsonArray{ mkRule("p", "root-rule", "2-5") });
+        int asks = 0, logs = 0;
+        re.setLogCallback([&](const QString &){ ++logs; });
+        re.setEscalationCallback([&](QString, QString, int, QString, QString){ ++asks; });
+
+        for (int p = 0; p < 10; ++p) re.applyToProcess(1, "plqprobe");
+        check(asks == 1, "a rule needing root asks exactly ONCE, not once per pass");
+
+        // A second process matched by the same rule must not ask again — a rule
+        // matching a browser would otherwise open a dialog per process.
+        for (int p = 0; p < 10; ++p) re.applyToProcess(2, "plqprobe");
+        check(asks == 1, "…and not again for another process of the same rule");
+
+        const int logsAfter = logs;
+        for (int p = 0; p < 20; ++p) re.applyToProcess(1, "plqprobe");
+        check(logs == logsAfter, "a permanently-failing rule does not flood the log");
+        check(logs <= 2, "at most one explanation per process, not per pass");
+    }
+
+    // ── 5. With no escalation handler at all, still no flood ───────────────
+    {
+        RuleEngine re;
+        re.loadRules(QJsonArray{ mkRule("q", "root-rule-2", "2-5") });
+        int logs = 0;
+        re.setLogCallback([&](const QString &){ ++logs; });
+        for (int p = 0; p < 20; ++p) re.applyToProcess(1, "plqprobe");
+        check(logs == 1, "without a handler, EPERM is explained exactly once");
+    }
+
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",
            failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

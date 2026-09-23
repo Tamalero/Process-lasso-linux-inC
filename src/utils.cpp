@@ -1,5 +1,6 @@
 #include "utils.h"
 #include <cerrno>
+#include <cstring>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -68,18 +69,45 @@ QList<int> getTids(int pid)
     return tids.isEmpty() ? QList<int>{pid} : tids;
 }
 
-bool setAffinity(int pid, const QString &cpulist)
+bool setAffinity(int pid, const QString &cpulist, int *errnoOut)
 {
+    if (errnoOut) *errnoOut = 0;
     const auto cpus = cpulistToSet(cpulist);
-    if (cpus.isEmpty()) return false;
+    if (cpus.isEmpty()) { if (errnoOut) *errnoOut = EINVAL; return false; }
     cpu_set_t mask;
     CPU_ZERO(&mask);
     for (int cpu : cpus) CPU_SET(cpu, &mask);
     const auto tids = getTids(pid);
     bool anyOk = false;
-    for (int tid : tids)
+    int  firstErr = 0;
+    for (int tid : tids) {
+        errno = 0;
         if (sched_setaffinity(tid, sizeof(mask), &mask) == 0) anyOk = true;
+        else if (!firstErr)                                   firstErr = errno;
+    }
+    if (errnoOut && !anyOk) *errnoOut = firstErr ? firstErr : EINVAL;
     return anyOk;
+}
+
+QString describeAffinityError(int err, int pid)
+{
+    if (err == EPERM) {
+        // The overwhelmingly common cause: the target belongs to another user
+        // (a root-owned daemon, or anything inside a container). Setting another
+        // user's affinity needs CAP_SYS_NICE, which this process does not have.
+        const QFileInfo fi(QStringLiteral("/proc/%1").arg(pid));
+        const QString owner = fi.owner().isEmpty()
+            ? QStringLiteral("uid %1").arg(fi.ownerId())
+            : fi.owner();
+        return QStringLiteral("not permitted — the process belongs to %1 and "
+                              "Process Lasso is running as %2. Changing another "
+                              "user's CPU affinity needs root.")
+                   .arg(owner, QStringLiteral("uid %1").arg(getuid()));
+    }
+    if (err == ESRCH)  return QStringLiteral("the process exited");
+    if (err == EINVAL) return QStringLiteral("none of those CPUs are usable "
+                                             "(offline or parked?)");
+    return QString::fromLocal8Bit(strerror(err));
 }
 
 QString getAffinityStr(int pid)

@@ -305,7 +305,8 @@ void ProcessTableWidget::doSetAffinity(const RowProc &p)
     AffinityDialog dlg(live.isEmpty() ? p.affinity : live, this, p.name);
     if (dlg.exec() == QDialog::Accepted) {
         const QString cpulist = dlg.getCpulist();
-        if (Utils::setAffinity(p.pid, cpulist)) {
+        int err = 0;
+        if (Utils::setAffinity(p.pid, cpulist, &err)) {
             if (m_logCb) m_logCb(QStringLiteral("Set affinity=%1 on %2(%3)").arg(cpulist, p.name).arg(p.pid));
             ManualChange c;
             c.pid = p.pid; c.name = p.name;
@@ -314,7 +315,9 @@ void ProcessTableWidget::doSetAffinity(const RowProc &p)
             refreshRow(p.pid);
             emit manualChangeApplied(c);
         } else {
-            if (m_logCb) m_logCb(QStringLiteral("Failed to set affinity on %1(%2)").arg(p.name).arg(p.pid));
+            if (m_logCb) m_logCb(QStringLiteral("Failed to set affinity on %1(%2) — %3")
+                                     .arg(p.name).arg(p.pid)
+                                     .arg(Utils::describeAffinityError(err, p.pid)));
         }
     }
 }

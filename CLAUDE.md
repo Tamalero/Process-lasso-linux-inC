@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.4.3**.
+Current version: **1.4.4**.
 
 ---
 
@@ -53,7 +53,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.4.3). One feature lives off it:
+`main` is the released line (currently 1.4.4). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -465,6 +465,63 @@ ProcessMonitor::cpuSnapshotReady(QList<double>)
 
 ---
 
+## Helper security model — read before touching helper/ (v1.4.4)
+
+### The helper CANNOT authenticate its caller. Do not try.
+
+Cesar asked, reasonably, whether the helper could be made to "only respond to the
+application". **It cannot**, and attempting it is actively harmful because it buys
+false confidence. Every available check is defeated by a caller that controls its own
+process image:
+
+| Check | How it fails |
+|---|---|
+| Parent's `/proc/<ppid>/exe` or name | The parent `exec()`s something else after `fork()` — a TOCTOU race — or simply copies the app binary and execs the helper from that |
+| A secret compiled into the app | The app binary is world-readable; `strings` it |
+| `argv[0]` | Caller-controlled |
+
+So the helper does **no** caller-identity checking. What contains the risk instead:
+
+1. **Scope the sudoers rule to one user.** Until 1.4.4 `install-helper.sh` wrote
+   `ALL ALL=(root) NOPASSWD: …` — *every local account* could run the helper as root
+   with no password. Nothing needed that. It is now scoped to the installing user,
+   taken from `PKEXEC_UID`/`SUDO_USER` (set by pkexec/sudo themselves, not by the
+   caller), validated with `visudo -cqf` before installation. **Do not widen it.**
+2. **A tiny fixed command set.** No shell, no `exec`, no caller-supplied paths. The
+   sysfs path is built with `%d` from a validated integer, never from caller text.
+3. **No command can grant code execution or change credentials.** The worst a hostile
+   caller gets is local denial of service — park CPUs, renice, repin. Genuinely bad,
+   not privilege escalation. **Any new command must preserve this property**; the
+   moment one can write an arbitrary path or run an arbitrary binary, the helper
+   becomes a root exploit and the sudoers rule becomes the vulnerability.
+4. **Validate every argument before use.** `set-affinity` rejects cpulists containing
+   anything but digits/comma/dash, longer than 255, or naming a CPU ≥ `_SC_NPROCESSORS_CONF`;
+   and refuses pid ≤ 1 and kernel threads (no `/proc/<pid>/exe`).
+
+### Escalation flow (affinity on another user's process)
+
+`sched_setaffinity` on a process you do not own fails with `EPERM` — common with
+Docker containers, which run as root. `Utils::setAffinity` now reports errno out, and
+`Utils::describeAffinityError()` turns it into a sentence naming the owner.
+
+`RuleEngine` then, per rule:
+- `rule.allowHelper` true (JSON `allow_helper`) or allowed for the session →
+  `CpuPark::setAffinityViaHelper()`.
+- otherwise → fire `EscalationCb` **once per rule per session** and wait. Once per
+  *rule*, never once per pid: a rule matching a browser would open 150 dialogs.
+- otherwise → explain once per rule+pid via `m_permWarned`.
+
+⚠️ Every branch is deduped. A rule that can never succeed runs twice a second forever,
+so an undeduped log line there is the 1.4.1 flood again. `tests/ruleengine-harness.cpp`
+asserts this using pid 1, which is root-owned and so yields EPERM without any
+privilege to set up.
+
+`ProcessMonitor` forwards the callback as a **queued** signal; the prompt must be built
+on the GUI thread. Answering "remember" writes `allowHelper` onto the rule, so the
+grant is visible and revocable in the Rules tab rather than hidden in a side list.
+
+---
+
 ## Privileged helper
 
 Binary: `/usr/local/bin/process-lasso-helper`  
@@ -473,15 +530,18 @@ Invoked by: `CpuPark::parkCpus()`, `CpuPark::unParkAll()`, `CpuPark::setProcessN
 
 ```
 process-lasso-helper cpu-online <N> <0|1>    # park/unpark single CPU
+process-lasso-helper set-affinity <cpulist> <pid>  # sched_setaffinity on every thread
 process-lasso-helper cpu-unpark-all          # reads /sys/.../offline, brings all back
 process-lasso-helper renice-pid <nice> <pid> # setpriority(PRIO_PROCESS, pid, nice)
 process-lasso-helper --check-only            # exit 0, used to verify sudo access
 ```
 
-Sudoers entry written by install-helper.sh:
+Sudoers entry written by install-helper.sh (**scoped to the installing user** since
+1.4.4 — it used to be `ALL ALL=`, see the security model above):
 ```
-ALL ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper
+<installing-user> ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper
 ```
+Existing installs keep the old permissive rule until the helper is reinstalled.
 
 `CpuPark::isHelperInstalled()` — checks file exists and is executable  
 `CpuPark::isSudoersInstalled()` — checks `/etc/sudoers.d/process-lasso` exists  
@@ -892,8 +952,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.4.3-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.4.3-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.4.4-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.4.4-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:

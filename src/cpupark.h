@@ -23,5 +23,9 @@ bool unParkAll(std::function<void(const QString &)> logCb = nullptr);
 
 // Renice via helper (needed for negative nice values requiring root)
 bool setProcessNiceViaHelper(int pid, int niceVal);
+// Affinity for a process this user does not own. Only reached after a plain
+// sched_setaffinity has already failed with EPERM, and only for a rule the user
+// has explicitly allowed to escalate.
+bool setAffinityViaHelper(int pid, const QString &cpulist);
 
 } // namespace CpuPark

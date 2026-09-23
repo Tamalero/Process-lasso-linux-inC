@@ -37,6 +37,11 @@ signals:
     void cpuSnapshotReady(QList<double> percpu);
     void sensorsReady(SensorSnapshot sensors);
     void logMessage(QString msg);
+    // A rule needs root to set affinity on someone else's process. Queued to the
+    // GUI thread, which asks the user; the engine has already deduped to one
+    // per rule per session.
+    void affinityEscalationNeeded(QString ruleId, QString ruleName, int pid,
+                                  QString procName, QString cpulist);
 
 protected:
     void run() override;

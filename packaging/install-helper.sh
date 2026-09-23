@@ -15,13 +15,52 @@ fi
 
 install -o root -g root -m 0755 "$HELPER_SRC" "$HELPER_DST"
 
-# Write sudoers rule allowing the current user (or any user) to run the helper
-# without a password prompt.  Restrict to specific allowed commands only.
-cat > "$SUDOERS_FILE" <<'SUDOERS'
-# process-lasso-qt: allow privileged helper without password
-ALL ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper
+# Who asked for this install? We run as root under pkexec (or sudo), so the
+# real user has to come from the environment those set themselves -- it is not
+# caller-supplied data.
+TARGET_USER=""
+if [[ -n "${PKEXEC_UID:-}" ]]; then
+    TARGET_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
+fi
+if [[ -z "$TARGET_USER" && -n "${SUDO_USER:-}" ]]; then
+    TARGET_USER="$SUDO_USER"
+fi
+
+# The sudoers rule grants PASSWORDLESS ROOT execution of the helper. Scope it to
+# the one account that installed it.
+#
+# It used to read "ALL ALL=(root) NOPASSWD: ..." -- every local account on the
+# machine could run it as root with no password. Nothing about the app needed
+# that; it was simply too broad. Do not widen it again.
+#
+# The helper cannot tell whether its caller is really Process Lasso -- see the
+# security note at the top of helper/main.cpp -- so limiting WHO may invoke it
+# is the control that actually does work.
+if [[ -n "$TARGET_USER" ]]; then
+    SUDOERS_WHO="$TARGET_USER"
+else
+    echo "WARNING: could not determine the installing user; falling back to ALL." >&2
+    echo "         Edit $SUDOERS_FILE and replace ALL with your username." >&2
+    SUDOERS_WHO="ALL"
+fi
+
+TMP_SUDOERS="$(mktemp)"
+cat > "$TMP_SUDOERS" <<SUDOERS
+# process-lasso-qt: allow the privileged helper without a password.
+# Scoped to one user on purpose -- see packaging/install-helper.sh.
+$SUDOERS_WHO ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper
 SUDOERS
 
-chmod 0440 "$SUDOERS_FILE"
+# Never install a sudoers file that does not parse: a malformed one can lock
+# sudo out for everybody.
+if ! visudo -cqf "$TMP_SUDOERS"; then
+    echo "ERROR: generated sudoers file is invalid; not installing it." >&2
+    rm -f "$TMP_SUDOERS"
+    exit 1
+fi
+
+install -o root -g root -m 0440 "$TMP_SUDOERS" "$SUDOERS_FILE"
+rm -f "$TMP_SUDOERS"
 
 echo "process-lasso-helper installed successfully."
+echo "sudoers rule scoped to: $SUDOERS_WHO"

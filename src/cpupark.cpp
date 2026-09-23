@@ -130,6 +130,13 @@ bool unParkAll(std::function<void(const QString &)> logCb)
     return ok;
 }
 
+bool setAffinityViaHelper(int pid, const QString &cpulist)
+{
+    auto [ok, msg] = runHelper({QStringLiteral("set-affinity"), cpulist,
+                                QString::number(pid)});
+    return ok;
+}
+
 bool setProcessNiceViaHelper(int pid, int niceVal)
 {
     auto [ok, msg] = runHelper({QStringLiteral("renice-pid"),

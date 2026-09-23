@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
@@ -358,6 +359,8 @@ void MainWindow::startMonitor()
             this, &MainWindow::onSensors, Qt::QueuedConnection);
     connect(m_monitor, &ProcessMonitor::logMessage,
             this, &MainWindow::appendLog, Qt::QueuedConnection);
+    connect(m_monitor, &ProcessMonitor::affinityEscalationNeeded,
+            this, &MainWindow::onAffinityEscalationNeeded, Qt::QueuedConnection);
     applyTemperatureSetting();
     m_monitor->start();
 }
@@ -752,6 +755,61 @@ void MainWindow::onPbExemptSessionToggle(const QString &name, bool exempt)
 
     // Never touches m_config: this list must not survive into config.json.
     refreshPbExemptPatterns();
+}
+
+void MainWindow::onAffinityEscalationNeeded(QString ruleId, QString ruleName, int pid,
+                                            QString procName, QString cpulist)
+{
+    const QFileInfo fi(QStringLiteral("/proc/%1").arg(pid));
+    const QString owner = fi.owner().isEmpty()
+        ? QStringLiteral("uid %1").arg(fi.ownerId()) : fi.owner();
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QStringLiteral("Root needed to apply this rule"));
+    box.setText(QStringLiteral("<b>%1</b> cannot set affinity on <b>%2</b> (%3).")
+                    .arg(ruleName, procName).arg(pid));
+    box.setInformativeText(
+        QStringLiteral("That process belongs to <b>%1</b>, and changing another "
+                       "user's CPU affinity needs root.<br><br>"
+                       "Apply <b>%2</b> using the privileged helper?<br><br>"
+                       "<small>The helper runs as root. It can change CPU affinity, "
+                       "priority and CPU parking — it cannot run other programs. "
+                       "Declining leaves this rule's affinity unapplied for "
+                       "processes you do not own; the rest of the rule still "
+                       "works.</small>")
+            .arg(owner, cpulist));
+    auto *remember = new QCheckBox(QStringLiteral("Remember this choice for this rule"), &box);
+    box.setCheckBox(remember);
+    auto *useBtn  = box.addButton(QStringLiteral("Use helper"), QMessageBox::AcceptRole);
+    auto *skipBtn = box.addButton(QStringLiteral("Skip"), QMessageBox::RejectRole);
+    box.setDefaultButton(skipBtn);
+    box.exec();
+
+    const bool use = (box.clickedButton() == useBtn);
+    if (use && remember->isChecked()) {
+        // Persist the opt-in on the rule itself, so it is visible and revocable
+        // in the Rules tab rather than hidden in a separate list.
+        for (auto r : m_ruleEngine.rules()) {
+            if (r.ruleId != ruleId) continue;
+            r.allowHelper = true;
+            m_ruleEngine.updateRule(r);
+            break;
+        }
+        m_rulesEditor->refresh();
+        saveConfig();
+    } else if (use) {
+        m_ruleEngine.allowHelperForSession(ruleId);
+    }
+
+    appendLog(use
+        ? QStringLiteral("[Rule:%1] will use the privileged helper for processes "
+                         "owned by other users%2")
+              .arg(ruleName, remember->isChecked() ? QStringLiteral(" (saved)")
+                                                   : QStringLiteral(" (this session)"))
+        : QStringLiteral("[Rule:%1] declined root; affinity will not be applied to "
+                         "%2(%3) or other processes you do not own")
+              .arg(ruleName, procName).arg(pid));
 }
 
 void MainWindow::onPbSettingsChanged(QJsonObject pbCfg)

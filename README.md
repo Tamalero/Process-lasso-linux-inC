@@ -4,6 +4,25 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.4.4
+
+Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**⚠️ Security: reinstall the privileged helper.** The sudoers rule used to read
+`ALL ALL=(root) NOPASSWD: …`, letting *every local account* run the helper as
+root without a password. It is now scoped to the single user who installs it.
+Existing installations keep the old permissive rule until you reinstall the
+helper from the Gaming Mode tab.
+
+**Rules can now apply affinity to processes you do not own.** Anything running as
+root — a Docker container, say — previously failed silently, because changing
+another user's CPU affinity needs root. You are now asked once per rule whether
+to apply it through the privileged helper, with an option to remember the choice.
+
+**"Failed to set affinity" now tells you why** — whether the process belongs to
+another user (and which), whether the CPUs you asked for are parked, or whether
+the process simply exited.
+
 ## What's New in 1.4.3
 
 Full history in [CHANGELOG.md](CHANGELOG.md).

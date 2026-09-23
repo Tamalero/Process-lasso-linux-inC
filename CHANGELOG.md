@@ -2,6 +2,52 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.4.4] — 2026-09-23
+
+### Security — the sudoers rule was far too broad
+
+`install-helper.sh` wrote `ALL ALL=(root) NOPASSWD: /usr/local/bin/process-lasso-helper`.
+That let **every local account on the machine** run the privileged helper as root
+without a password. Nothing about the application needed that.
+
+The rule is now scoped to the single user who installs it, taken from
+`PKEXEC_UID`/`SUDO_USER` (set by pkexec and sudo themselves), and validated with
+`visudo -cqf` before installation so a malformed file can never lock out sudo.
+
+**Existing installations keep the old permissive rule until you reinstall the
+helper.** If you have other user accounts on this machine, reinstalling is worth
+doing even if you do not need the new feature.
+
+To be explicit about what is *not* claimed: the helper does not try to verify
+that its caller is Process Lasso, because that is not possible — a caller
+controls its own process image, so checking a parent's name or path is defeated
+by `exec()` after `fork()`, or by copying the app binary. Limiting *who* may
+invoke it is the control that actually works. The helper has no shell, no
+`exec`, and takes no caller-supplied paths, so the worst a hostile caller
+achieves is local denial of service, not privilege escalation.
+
+### Added — rules can now apply affinity to processes you do not own
+
+Setting CPU affinity on another user's process needs root, so a rule targeting
+anything running as root — a Docker container, for instance — failed silently.
+
+When a rule hits this, you are now asked once whether to apply it through the
+privileged helper, with a **Remember this choice for this rule** option. Saying
+yes stores `allow_helper` on the rule, so the grant is visible and revocable in
+the Rules tab rather than hidden away. You are asked once per rule, never once
+per process.
+
+The new `set-affinity` helper command rejects cpulists containing anything but
+digits, commas and dashes, cpulists naming a CPU that does not exist, pid 1, and
+kernel threads.
+
+### Fixed — "Failed to set affinity" now says why
+
+The message was identical whether the process belonged to another user, every
+requested CPU was parked, or the process had just exited. It now names the
+cause, and the owner when the cause is ownership. Rule-driven failures are
+reported once per rule and process rather than on every enforcement pass.
+
 ## [1.4.3] — 2026-09-23
 
 ### Fixed — two rules for the same process fought each other, flooding the log

@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QHash>
 #include <QJsonObject>
+#include <atomic>
 
 class ProcessMonitor : public QThread {
     Q_OBJECT
@@ -19,9 +20,16 @@ public:
 
     void stop();
     void updateConfig(const QJsonObject &config);
+    // The next three are REQUESTS: safe to call from the GUI thread, carried out
+    // by run() on the monitor thread at its next loop (≤100 ms). They used to do
+    // the work inline on the caller's thread, racing run() over m_knownPids,
+    // m_originalAffinities, m_gamingNiced and RuleEngine's dedupe sets.
     void reapplyAllDefaults();
     void resetAllAffinities();
     void setGamingMode(bool active, bool elevateNice);
+    // ProBalance's throttled set as of its last tick. ProBalance itself is
+    // monitor-thread only; this is a copy published under m_configMux.
+    QSet<int> throttledPids() const;
     // Suppress ALL rule enforcement for one pid (affinity, nice and ionice —
     // the enforcement loop skips the whole applyToProcess call). A duration of
     // 0 means indefinite: until the process exits or the override is cleared.
@@ -69,8 +77,15 @@ private:
     ProBalance   *m_proBalance;
     QJsonObject   m_config;
     mutable QMutex m_configMux;
-    bool          m_stop = false;
+    std::atomic<bool> m_stop{false};    // written by the GUI thread, read by run()
     bool          m_safeMode = false;   // guarded by m_configMux
+    // Pending GUI requests, all guarded by m_configMux and consumed by run().
+    bool          m_reapplyDefaultsReq = false;
+    bool          m_resetAffinitiesReq = false;
+    bool          m_gamingReq          = false;
+    bool          m_gamingReqActive    = false;
+    bool          m_gamingReqNice      = false;
+    QSet<int>     m_throttledPub;      // published copy of ProBalance::throttledPids()
     // Set by updateConfig(); consumed by run() on the monitor thread, which is
     // the only thread allowed to write ProBalance's config (it has no mutex).
     bool          m_pbConfigDirty = true;  // guarded by m_configMux
@@ -80,6 +95,8 @@ private:
     bool          m_cpusParked = false;
     QString       m_defAffinityWarnSig;   // dedupes the "could not apply" log
 
+    // Monitor-thread only. Pruned of exited pids every loop: a recycled pid must
+    // not inherit the previous process's "original" mask or nice value.
     QSet<int>               m_knownPids;
     QHash<int, QSet<int>>   m_originalAffinities; // pid → original affinity
     QHash<int, ProcCpuState>m_cpuStates;
@@ -93,6 +110,9 @@ private:
     QStringList        m_pbSessionExempt;  // guarded by m_configMux
 
     QString defaultAffinity() const;
+    // Monitor-thread bodies of the requests above.
+    void    doReapplyAllDefaults(const QList<ProcessInfo> &snapshot);
+    void    doResetAllAffinities();
     void    applyNewPid(const ProcessInfo &info);
     void    restoreGamingNices();
     void    captureOriginal(int pid);

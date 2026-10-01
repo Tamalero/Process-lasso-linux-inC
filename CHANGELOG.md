@@ -2,6 +2,35 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.5.1] — 2026-09-30
+
+### Fixed — crashes and wrong values from the GUI and monitor threads racing
+
+Editing a rule (adding, deleting, toggling, importing, or answering the
+"change rule?" prompt) changed the rule list on the GUI thread while the monitor
+thread was walking it twice a second. ThreadSanitizer caught the monitor reading
+rules that had already been freed — memory corruption that can crash the app.
+Rule edits are now locked and swapped in whole, and the monitor works from its
+own snapshot.
+
+Every rule edit also re-applied defaults *on the GUI thread*, running rule
+enforcement on two threads at once. That, Reset, and turning Gaming Mode on or off
+are now requests the monitor thread carries out itself, and the Processes tab
+reads ProBalance's throttled list from a copy instead of from ProBalance directly.
+
+### Fixed — a recycled PID inherited the previous process's saved state
+
+The saved "original affinity" and pre-Gaming-Mode priority were never forgotten
+when a process exited. When Linux reused that PID, *Reset* could give the new
+process the old one's CPU mask, and leaving Gaming Mode could renice an unrelated
+process. Both are now dropped as soon as the process exits.
+
+### Fixed — the default affinity could override a rule
+
+With a default affinity set, a new process that matched a rule whose setting was
+*already* correct (for example a browser child inheriting its parent's mask) was
+treated as matching no rule, and got the default instead until the next pass.
+
 ## [1.5.0] — 2026-09-23
 
 ### Added — rules can match the command line, not just the process name

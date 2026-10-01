@@ -52,12 +52,22 @@ public:
                                             QString cpulist)>;
     void setEscalationCallback(EscalationCb cb) { m_escalationCb = std::move(cb); }
     // "Yes, but only for this run" — the answer is not written to the rule.
-    void allowHelperForSession(const QString &ruleId) { m_sessionHelper.insert(ruleId); }
+    void allowHelperForSession(const QString &ruleId);
 
+    // ── Threading ───────────────────────────────────────────────────────────
+    // The rule list is EDITED on the GUI thread (Rules tab, Processes tab,
+    // escalation prompt) and READ on the monitor thread twice a second. Every
+    // mutator below takes m_rulesMux; the monitor-thread readers
+    // (applyToProcess, isPbExempt, matchesAny) copy the list under it and
+    // iterate the copy — QList is implicitly shared, so that copy is a refcount
+    // bump and a GUI edit detaches instead of mutating under the reader.
+    // rules() returns a reference WITHOUT locking: GUI thread only, which is
+    // safe because the GUI thread is the only writer.
+    // Everything else in this class (the dedupe sets) is monitor-thread only.
     void loadRules(const QJsonArray &arr);
     QJsonArray toJsonArray() const;
 
-    const QList<Rule> &rules() const { return m_rules; }
+    const QList<Rule> &rules() const { return m_rules; }  // GUI thread only
     void addRule(const Rule &rule);
     void removeRule(const QString &ruleId);
     void updateRule(const Rule &rule);
@@ -85,8 +95,13 @@ public:
 
     // Returns true if any enabled rule with pbExempt=true matches procName.
     bool isPbExempt(const QString &procName, const QString &cmdline = QString()) const;
+    // Does ANY enabled rule match? Use this, not "applyToProcess() returned
+    // nothing", to decide whether a default applies: a matching rule whose value
+    // is already correct also returns nothing.
+    bool matchesAny(const QString &procName, const QString &cmdline = QString()) const;
 
 private:
+    mutable QMutex m_rulesMux;          // guards m_rules and m_sessionHelper
     QList<Rule> m_rules;
     LogCb       m_logCb;
     // ruleId → signature of the last "affinity not applied" warning, so a
@@ -98,7 +113,10 @@ private:
     QSet<QString> m_permWarned;
     EscalationCb  m_escalationCb;
     QSet<QString> m_escalationAsked;   // ruleId — asked once per session, answer or not
-    QSet<QString> m_sessionHelper;     // ruleId — allowed for this run only
+    QSet<QString> m_sessionHelper;     // ruleId — allowed for this run only; m_rulesMux
+
+    // Consistent copy for a monitor-thread pass.
+    void snapshot(QList<Rule> &rules, QSet<QString> *sessionHelper = nullptr) const;
 
     void log(const QString &msg);
     void warnOnce(const Rule &rule, int pid, const QString &procName,

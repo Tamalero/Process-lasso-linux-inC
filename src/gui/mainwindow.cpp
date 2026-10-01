@@ -242,7 +242,7 @@ void MainWindow::buildUi()
             // visibly changes the tables, that is a bug worth reporting.
             m_rulesEditor->refresh();
             refreshPbExemptPatterns();
-            m_procTable->updateThrottled(m_proBalance->throttledPids());
+            m_procTable->updateThrottled(m_monitor->throttledPids());
 
             m_monitor->reapplyRulesNow();
             // The result lands in the Log a moment later; showing that tab is
@@ -569,7 +569,7 @@ void MainWindow::onSnapshot(const QList<ProcessInfo> &snapshot)
     // updateThrottled() must come *before* updateSnapshot(), which is what
     // repaints the rows — setting it after left the Status column one whole
     // refresh behind. (The exempt patterns are pushed on change, not per frame.)
-    m_procTable->updateThrottled(m_proBalance->throttledPids());
+    m_procTable->updateThrottled(m_monitor->throttledPids());
     m_procTable->updateSnapshot(snapshot);
 
     // Repaint the Rules tab only when a rule starts or stops failing. Rebuilding

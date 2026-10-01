@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.5.0**.
+Current version: **1.5.1**.
 
 ---
 
@@ -39,6 +39,7 @@ tests/
   probalance-harness.cpp— standalone ProBalance checks; not in the CMake build
   ruleengine-harness.cpp— asserts rule enforcement is SILENT once values match
   monitor-harness.cpp   — drives ProcessMonitor headless: rule apply + manual override
+  race-harness.cpp      — GUI/monitor races under ThreadSanitizer (see Thread-safety rules)
 helper/
   main.cpp              — privileged C binary (no Qt), commands below
 packaging/
@@ -53,7 +54,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.5.0). One feature lives off it:
+`main` is the released line (currently 1.5.1). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -429,7 +430,7 @@ tab first. Identical lines repeating every second for the same pids is this bug.
 ```
 GUI thread (main)
   └─ MainWindow owns:
-       RuleEngine       (no thread, called from monitor thread via signal)
+       RuleEngine       (no thread; GUI edits rules under m_rulesMux, monitor enforces)
        ProBalance*      (no thread, called from monitor thread via signal)
        ProcessMonitor*  (QThread — run() is the background loop)
 
@@ -1135,8 +1136,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.5.0-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.5.0-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.5.1-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.5.1-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -1389,5 +1390,39 @@ add a wrapper in `cpupark.{h,cpp}`, invoke via `QProcess::execute("sudo", {"path
 ever called from the monitor thread. Do not call them from the GUI thread directly.
 If you need GUI → engine communication, go through `ProcessMonitor::updateConfig()`,
 which flags the change and lets `run()` hand it to ProBalance on its own thread.
-(`MainWindow::onSnapshot()` still reads `m_proBalance->throttledPids()` from the GUI
-thread — a pre-existing race, not one to copy.)
+(The GUI gets ProBalance's throttled set from `ProcessMonitor::throttledPids()`, a
+published copy. See "Thread-safety rules" below.)
+
+---
+
+## Thread-safety rules (v1.5.1, 2026-09-30)
+
+Found while chasing a "browsers get laggier" report that turned out to be swap
+(memory `browser-lag-was-swap`) — **before blaming this app for a slow *other*
+app, check that app's cgroup `memory.swap.current` / `pgmajfault`.**
+
+1. **`RuleEngine`'s rule list is guarded by `m_rulesMux`.** The GUI thread is the
+   only writer; mutators **copy, edit, swap** under the lock and never write into
+   the live buffer. Monitor-thread readers (`applyToProcess`, `isPbExempt`,
+   `matchesAny`) take a `snapshot()` and iterate it with `std::as_const`.
+   Editing in place relied on QList's relaxed "am I shared?" check and still
+   tripped ThreadSanitizer — keep the copy-and-swap. `rules()` is unlocked and
+   **GUI-thread only**. Everything else in `RuleEngine` (the dedupe sets) is
+   monitor-thread only.
+2. **GUI → monitor actions are REQUESTS.** `reapplyAllDefaults()`,
+   `resetAllAffinities()` and `setGamingMode()` only set flags under
+   `m_configMux`; `run()` does the work. They used to run inline on the GUI
+   thread — so every rule edit ran `applyToProcess()` on two threads at once.
+   `m_knownPids`, `m_originalAffinities` and `m_gamingNiced` are now
+   **monitor-thread only**; keep it that way.
+3. **Per-pid state is pruned every loop** (`m_cpuStates`, `m_originalAffinities`,
+   `m_gamingNiced`), so a recycled pid never inherits a dead process's entry.
+4. **"No actions" ≠ "no rule".** Since 1.4.1 an already-correct rule returns an
+   empty list. Use `RuleEngine::matchesAny()` to decide whether a default applies.
+5. ProBalance's throttled set reaches the GUI via `ProcessMonitor::throttledPids()`,
+   a copy published after each tick — never call `m_proBalance` from the GUI.
+
+`tests/race-harness.cpp` checks this under **ThreadSanitizer**: 1.5.0's engine gives
+19 data races + a heap-use-after-free; the fix gives none. TSan always also reports a
+`thread leak` and (in `monitor-harness`) races in `~ProcessMonitor` after `wait()` —
+identical on 1.5.0, an artefact of Qt's uninstrumented `QThread::wait()`. Ignore those two.

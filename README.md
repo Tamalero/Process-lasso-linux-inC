@@ -4,9 +4,18 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
-## What's New in 1.5.0
+## What's New in 1.5.1
 
 Full history in [CHANGELOG.md](CHANGELOG.md).
+
+**Stability fix.** Editing a rule while the app was enforcing rules could make the
+two threads collide — ThreadSanitizer caught the monitor reading rules that had
+already been freed, which can crash the app. Rule edits, Reset and Gaming Mode
+changes are now handed safely to the monitor thread. Also fixed: a reused process
+ID could inherit a dead process's saved affinity or priority, and a default
+affinity could briefly override a matching rule.
+
+## What's New in 1.5.0
 
 **Rules can match the command line.** Several processes often share a name — a
 dozen `python3.13` interpreters, every Electron app called `node` — and a rule on

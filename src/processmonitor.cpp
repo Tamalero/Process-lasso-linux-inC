@@ -92,7 +92,10 @@ void ProcessMonitor::applyNewPid(const ProcessInfo &info)
                     .arg(info.name).arg(info.pid));
             }
         }
-    } else {
+    } else if (!m_ruleEngine->matchesAny(info.name, info.cmdline)) {
+        // "No actions" is NOT "no rule": since 1.4.1 a matching rule whose value
+        // is already correct also returns nothing, and falling through here then
+        // overwrote that rule's affinity with the default until the next pass.
         const QString def = defaultAffinity();
         if (def.isEmpty()) return;
         if (Utils::setAffinity(info.pid, def)) {
@@ -136,20 +139,38 @@ void ProcessMonitor::restoreGamingNices()
 
 void ProcessMonitor::reapplyAllDefaults()
 {
-    const QString def = defaultAffinity();
-    if (def.isEmpty()) return;
-    for (int pid : std::as_const(m_knownPids)) {
-        const QString comm = readComm(pid);
-        if (comm.isEmpty()) continue;
-        const auto cmdline = readCmdline(pid);
-        const QString name = Utils::resolveName(comm, cmdline);
-        const auto actions = m_ruleEngine->applyToProcess(pid, name, cmdline.join(QLatin1Char(' ')));
-        if (actions.isEmpty() && Utils::setAffinity(pid, def))
-            emitLog(QStringLiteral("[Default] affinity=%1 → %2(%3)").arg(def, name).arg(pid));
-    }
+    QMutexLocker lk(&m_configMux);
+    m_reapplyDefaultsReq = true;
 }
 
 void ProcessMonitor::resetAllAffinities()
+{
+    QMutexLocker lk(&m_configMux);
+    m_resetAffinitiesReq = true;
+}
+
+QSet<int> ProcessMonitor::throttledPids() const
+{
+    QMutexLocker lk(&m_configMux);
+    return m_throttledPub;
+}
+
+// Runs on the monitor thread. It used to run on the GUI thread (every rule edit
+// calls it), concurrently with run()'s own applyToProcess() — two threads writing
+// RuleEngine's unguarded dedupe sets at once.
+void ProcessMonitor::doReapplyAllDefaults(const QList<ProcessInfo> &snapshot)
+{
+    const QString def = defaultAffinity();
+    if (def.isEmpty()) return;
+    for (const auto &info : snapshot) {
+        m_ruleEngine->applyToProcess(info.pid, info.name, info.cmdline);
+        if (m_ruleEngine->matchesAny(info.name, info.cmdline)) continue;
+        if (Utils::setAffinity(info.pid, def))
+            emitLog(QStringLiteral("[Default] affinity=%1 → %2(%3)").arg(def, info.name).arg(info.pid));
+    }
+}
+
+void ProcessMonitor::doResetAllAffinities()
 {
     const int total = Utils::getCpuCount();
     QSet<int> allCpus;
@@ -171,9 +192,10 @@ void ProcessMonitor::resetAllAffinities()
 
 void ProcessMonitor::setGamingMode(bool active, bool elevateNice)
 {
-    m_gamingMode = active;
-    m_gamingNice = elevateNice;
-    if (!active && !m_gamingNiced.isEmpty()) restoreGamingNices();
+    QMutexLocker lk(&m_configMux);
+    m_gamingReq       = true;
+    m_gamingReqActive = active;
+    m_gamingReqNice   = elevateNice;
 }
 
 void ProcessMonitor::setManualOverride(int pid, double durationSeconds)
@@ -391,11 +413,42 @@ void ProcessMonitor::run()
                 currentPids.insert(pid);
             }
 
-            // Clean up CPU states for dead processes
+            // Clean up per-pid state for dead processes. m_originalAffinities and
+            // m_gamingNiced were never pruned, so a recycled pid inherited the
+            // previous process's entry: Reset restored the wrong mask to it, and
+            // leaving Gaming Mode reniced an unrelated process.
             for (auto it = m_cpuStates.begin(); it != m_cpuStates.end(); ) {
                 if (!currentPids.contains(it.key())) it = m_cpuStates.erase(it);
                 else ++it;
             }
+            for (auto it = m_originalAffinities.begin(); it != m_originalAffinities.end(); ) {
+                if (!currentPids.contains(it.key())) it = m_originalAffinities.erase(it);
+                else ++it;
+            }
+            for (auto it = m_gamingNiced.begin(); it != m_gamingNiced.end(); ) {
+                if (!currentPids.contains(it.key())) it = m_gamingNiced.erase(it);
+                else ++it;
+            }
+
+            // ── GUI requests, carried out here on the monitor thread ─────────
+            bool reqDefaults = false, reqReset = false, reqGaming = false;
+            bool gamingActive = false, gamingNice = false;
+            {
+                QMutexLocker lk(&m_configMux);
+                std::swap(reqDefaults, m_reapplyDefaultsReq);
+                std::swap(reqReset,    m_resetAffinitiesReq);
+                std::swap(reqGaming,   m_gamingReq);
+                gamingActive = m_gamingReqActive;
+                gamingNice   = m_gamingReqNice;
+            }
+            if (reqGaming) {
+                m_gamingMode = gamingActive;
+                m_gamingNice = gamingNice;
+                if (!gamingActive && !m_gamingNiced.isEmpty()) restoreGamingNices();
+            }
+            if (reqReset) doResetAllAffinities();
+            // Safe mode suppresses applying config; the inline version ignored it.
+            if (reqDefaults && !safeMode) doReapplyAllDefaults(newSnapshot);
 
             // New PIDs: apply rules or default affinity
             const QSet<int> newPids = currentPids - m_knownPids;
@@ -492,6 +545,8 @@ void ProcessMonitor::run()
                         pbExempt.insert(proc.pid);
                 }
                 m_proBalance->tick(snapshot, tickSec, pbExempt);
+                const QSet<int> throttled = m_proBalance->throttledPids();
+                { QMutexLocker lk(&m_configMux); m_throttledPub = throttled; }
                 lastProbal = now;
             }
 

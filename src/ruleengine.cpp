@@ -7,6 +7,7 @@
 #include "verbose.h"
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <utility>
 
 // ── Rule ──────────────────────────────────────────────────────────────────────
 
@@ -73,33 +74,71 @@ Rule Rule::fromJson(const QJsonObject &obj)
 
 void RuleEngine::log(const QString &msg) { if (m_logCb) m_logCb(msg); }
 
+// Called before the monitor starts (MainWindow ctor) and by the harnesses, so
+// touching the monitor-owned m_affinityWarned here is safe.
 void RuleEngine::loadRules(const QJsonArray &arr)
 {
-    m_affinityWarned.clear();
-    m_rules.clear();
+    QList<Rule> loaded;
     for (const auto &v : arr)
-        if (v.isObject()) m_rules.append(Rule::fromJson(v.toObject()));
+        if (v.isObject()) loaded.append(Rule::fromJson(v.toObject()));
+    m_affinityWarned.clear();
+    QMutexLocker lk(&m_rulesMux);
+    m_rules = loaded;
 }
 
 QJsonArray RuleEngine::toJsonArray() const
 {
+    QList<Rule> rules; snapshot(rules);
     QJsonArray arr;
-    for (const auto &r : m_rules) arr.append(r.toJson());
+    for (const auto &r : rules) arr.append(r.toJson());
     return arr;
 }
 
-void RuleEngine::addRule(const Rule &rule) { m_rules.append(rule); }
+void RuleEngine::snapshot(QList<Rule> &rules, QSet<QString> *sessionHelper) const
+{
+    QMutexLocker lk(&m_rulesMux);
+    rules = m_rules;
+    if (sessionHelper) *sessionHelper = m_sessionHelper;
+}
+
+// Mutators never write into the live buffer: they edit a copy and swap it in.
+// The monitor may still be reading the old buffer through its snapshot, and
+// QList decides "shared or not" with a relaxed load — editing in place whenever
+// it happened to read refcount 1 was flagged by ThreadSanitizer. The copy here
+// is always detached (m_rules still holds the old buffer), so no buffer is ever
+// written after another thread could have seen it.
+void RuleEngine::allowHelperForSession(const QString &ruleId)
+{
+    QMutexLocker lk(&m_rulesMux);
+    QSet<QString> next = m_sessionHelper;
+    next.insert(ruleId);
+    m_sessionHelper = next;
+}
+
+void RuleEngine::addRule(const Rule &rule)
+{
+    QMutexLocker lk(&m_rulesMux);
+    QList<Rule> next = m_rules;
+    next.append(rule);
+    m_rules = next;
+}
 
 void RuleEngine::removeRule(const QString &ruleId)
 {
-    m_rules.removeIf([&](const Rule &r){ return r.ruleId == ruleId; });
+    QMutexLocker lk(&m_rulesMux);
+    QList<Rule> next = m_rules;
+    next.removeIf([&](const Rule &r){ return r.ruleId == ruleId; });
+    m_rules = next;
 }
 
 void RuleEngine::updateRule(const Rule &rule)
 {
-    for (auto &r : m_rules) {
-        if (r.ruleId == rule.ruleId) { r = rule; return; }
+    QMutexLocker lk(&m_rulesMux);
+    QList<Rule> next = m_rules;
+    for (auto &r : next) {
+        if (r.ruleId == rule.ruleId) { r = rule; break; }
     }
+    m_rules = next;
 }
 
 // One line per rule+process for a failure that will otherwise repeat on every
@@ -166,7 +205,10 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
     // Per attribute, not per rule: one rule setting affinity and another setting
     // nice for the same process is a legitimate combination and still works.
     bool affinityDone = false, niceDone = false, ioniceDone = false;
-    for (const auto &rule : m_rules) {
+    // Iterate a copy: the GUI thread may edit the rules mid-pass (see header).
+    QList<Rule> rules; QSet<QString> sessionHelper;
+    snapshot(rules, &sessionHelper);
+    for (const auto &rule : std::as_const(rules)) {
         if (!rule.matches(procName, cmdline)) continue;
         if (rule.affinity && !affinityDone) {
             // Claimed even if the write below fails, so a losing rule cannot
@@ -206,7 +248,7 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
                 if (setErr == EPERM) {
                     const QString key = rule.ruleId + QLatin1Char('|') + QString::number(pid);
                     const bool mayEscalate = rule.allowHelper.value_or(false)
-                                          || m_sessionHelper.contains(rule.ruleId);
+                                          || sessionHelper.contains(rule.ruleId);
                     if (mayEscalate) {
                         if (CpuPark::setAffinityViaHelper(pid, *rule.affinity)) {
                             // Next pass sees the value already correct and stays
@@ -277,7 +319,7 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
                 const int err = errno;
                 const QString what = QStringLiteral("priority %1").arg(*rule.nice);
                 const bool mayEscalate = rule.allowHelper.value_or(false)
-                                      || m_sessionHelper.contains(rule.ruleId);
+                                      || sessionHelper.contains(rule.ruleId);
                 // The helper has had renice-pid since long before set-affinity,
                 // but only affinity ever used it — so a rule could set affinity
                 // on a root-owned process and then fail to set its priority.
@@ -326,7 +368,8 @@ QHash<QString, QStringList> RuleEngine::shadowedAttributes() const
 {
     QHash<QString, QStringList> out;
     QSet<QString> haveAffinity, haveNice, haveIonice;
-    for (const auto &r : m_rules) {
+    QList<Rule> rules; snapshot(rules);
+    for (const auto &r : std::as_const(rules)) {
         if (!r.enabled || r.pattern.isEmpty()) continue;
         // Same pattern AND same match type = the same set of processes.
         const QString key = r.pattern.toLower() + QChar(u'\u0000') + r.matchType
@@ -349,7 +392,16 @@ QHash<QString, QStringList> RuleEngine::shadowedAttributes() const
 
 bool RuleEngine::isPbExempt(const QString &procName, const QString &cmdline) const
 {
-    for (const auto &rule : m_rules)
+    QList<Rule> rules; snapshot(rules);
+    for (const auto &rule : std::as_const(rules))
         if (rule.pbExempt.value_or(false) && rule.matches(procName, cmdline)) return true;
+    return false;
+}
+
+bool RuleEngine::matchesAny(const QString &procName, const QString &cmdline) const
+{
+    QList<Rule> rules; snapshot(rules);
+    for (const auto &rule : std::as_const(rules))
+        if (rule.matches(procName, cmdline)) return true;
     return false;
 }

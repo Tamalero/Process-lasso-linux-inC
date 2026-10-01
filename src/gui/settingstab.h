@@ -20,6 +20,7 @@ private:
     QJsonObject  m_config;
     QCheckBox   *m_defaultAffinityCb  = nullptr;
     QLineEdit   *m_defaultAffinityEdit = nullptr;
+    QSpinBox    *m_scanInterval   = nullptr;
     QSpinBox    *m_ruleInterval   = nullptr;
     QSpinBox    *m_displayInterval = nullptr;
     QCheckBox   *m_systemThemeCb  = nullptr;

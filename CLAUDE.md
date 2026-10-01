@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.5.1**.
+Current version: **1.5.2**.
 
 ---
 
@@ -54,7 +54,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.5.1). One feature lives off it:
+`main` is the released line (currently 1.5.2). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -435,7 +435,7 @@ GUI thread (main)
        ProcessMonitor*  (QThread — run() is the background loop)
 
 ProcessMonitor::run()  [background thread]
-  reads /proc every 100 ms
+  reads /proc every scan_interval_ms (500 ms–30 s, default 500)
   emits processSnapshotReady(QList<ProcessInfo>)  → MainWindow::onSnapshot()
   emits cpuSnapshotReady(QList<double>)           → MainWindow::onCpuForTray()
   emits logMessage(QString)                       → MainWindow::appendLog()
@@ -739,7 +739,8 @@ Saved by: `Config::save()` — atomic write (`.tmp` + rename)
     "gaming_profiles": {}             // name → { affinity, parkCpus[], ... }
   },
   "monitor": {
-    "rule_enforce_interval_ms": 500,
+    "scan_interval_ms": 500,          // 500–30000; ProcessMonitor::scanIntervalMs() clamps
+    "rule_enforce_interval_ms": 500,  // effective rate: max(this, scan interval)
     "display_refresh_interval_ms": 2000
   },
   "probalance": {
@@ -1136,8 +1137,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.5.1-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.5.1-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.5.2-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.5.2-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -1394,6 +1395,41 @@ which flags the change and lets `run()` hand it to ProBalance on its own thread.
 published copy. See "Thread-safety rules" below.)
 
 ---
+
+## Scan interval, tray icon, interval settings (v1.5.2, 2026-10-01)
+
+**Scan interval.** `run()` used to loop on a hard-coded `msleep(100)`; every pass
+re-reads every process in /proc. heaptrack measured **~750k heap allocations/s**,
+and the monitor alone used **12.4 % of a core**. It is now `monitor.scan_interval_ms`
+(**500 ms–30 s, default 500**, clamped in `ProcessMonitor::scanIntervalMs()`):
+**3.0 %** at the default. Enforcement and display refresh keep their own intervals
+but can only happen on a scan.
+- The sleep is a `std::condition_variable_any` on `m_configMux`, woken by `stop()`,
+  `updateConfig()` and every GUI request (`wakeLocked()`). ☠️ **Never put a plain
+  `msleep(interval)` back**: at 30 s, quitting would hang and `~MainWindow`'s
+  `wait(3000)` would time out with the thread still running. A 100 ms floor between
+  scans stops a settings slider (which saves config per step) causing a scan storm.
+- ⚠️ `std::condition_variable_any`, **not** `QWaitCondition`: the latter unlocks and
+  relocks inside uninstrumented Qt, and ThreadSanitizer then reports a "double lock"
+  plus a data race with both threads "holding" the mutex. Verified both ways.
+- `tests/scan-interval-harness.cpp`: clamping, a new process waits for the next scan,
+  a request wakes it (rule applied 20 ms later), `stop()` returns in 0 ms at 30 s.
+
+**Tray icon memory.** ☠️ On KDE the tray is `KStatusNotifierItem`, and
+`setIconByPixmap()` **keeps data from every icon it is handed** until exit. Painting
+a fresh icon each 2 s refresh cost **2.6 KB per update, ~4 MB/hour** — the whole of
+the "slow memory growth" (heaptrack: heap 13.3 → 19.0 MB over 90 min, freed at exit,
+so not a classic leak). `makeTrayIcon()` now caches its ≤ 69 icons and `onCpuForTray()`
+calls `setIcon()` only when the picture changes: **~40 B per change**, the rest is
+inside KDE. Do not "simplify" back to a fresh icon per refresh.
+
+**Interval settings were dead.** `SettingsTab` read/wrote `rule_interval_ms` /
+`display_interval_ms`; `run()` reads `rule_enforce_interval_ms` /
+`display_refresh_interval_ms`. "Apply Intervals" had never had any effect. Now the
+real keys, and Apply strips the dead ones from config.json. Same class as 1.4.9:
+**a GUI control is only real if something reads the key it writes** — grep for it.
+⚠️ Still open: Settings' "apply default affinity" checkbox (`apply_default_affinity`)
+is also not read — `ProcessMonitor::defaultAffinity()` only checks the string.
 
 ## Thread-safety rules (v1.5.1, 2026-09-30)
 

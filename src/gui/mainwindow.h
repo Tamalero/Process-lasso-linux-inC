@@ -40,6 +40,7 @@ private:
     ProBalance       *m_proBalance = nullptr;
     ProcessMonitor   *m_monitor    = nullptr;
     QSystemTrayIcon  *m_tray             = nullptr;
+    int               m_trayIconKey      = -1;   // last trayIconKey() shown
     QAction          *m_trayGamingAction    = nullptr;
     QAction          *m_trayCompanionAction = nullptr;
     CompanionWidget  *m_companion       = nullptr;

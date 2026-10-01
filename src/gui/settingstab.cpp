@@ -1,4 +1,5 @@
 #include "settingstab.h"
+#include "../processmonitor.h"
 #include <QGuiApplication>
 #include "dialogs.h"
 #include "../cputopology.h"
@@ -51,6 +52,16 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
     // --- Monitor intervals ---
     auto *monGroup = new QGroupBox(QStringLiteral("Monitor Intervals"), this);
     auto *monForm  = new QFormLayout(monGroup);
+    m_scanInterval = new QSpinBox(this);
+    m_scanInterval->setRange(ProcessMonitor::SCAN_MIN_MS, ProcessMonitor::SCAN_MAX_MS);
+    m_scanInterval->setSingleStep(500);
+    m_scanInterval->setSuffix(QStringLiteral(" ms"));
+    m_scanInterval->setToolTip(QStringLiteral(
+        "How often every running process is re-read. This is most of the app's own "
+        "CPU use.\nA new process is noticed — and gets its rule — up to this long "
+        "after it starts.\nRule enforcement and the display refresh cannot run "
+        "more often than this."));
+    monForm->addRow(QStringLiteral("Process scan interval:"), m_scanInterval);
     m_ruleInterval = new QSpinBox(this);
     m_ruleInterval->setRange(100, 10000);
     m_ruleInterval->setSingleStep(100);
@@ -61,6 +72,12 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
     m_displayInterval->setSingleStep(500);
     m_displayInterval->setSuffix(QStringLiteral(" ms"));
     monForm->addRow(QStringLiteral("Display refresh interval:"), m_displayInterval);
+    m_ruleInterval->setToolTip(QStringLiteral(
+        "How often rules are re-checked against running processes. Effectively at "
+        "least the scan interval."));
+    m_displayInterval->setToolTip(QStringLiteral(
+        "How often the Processes table and CPU graphs update. Effectively at least "
+        "the scan interval."));
     auto *monApply = new QPushButton(QStringLiteral("Apply Intervals"), this);
     connect(monApply, &QPushButton::clicked, this, &SettingsTab::applyMonitor);
     monForm->addRow(monApply);
@@ -167,8 +184,12 @@ void SettingsTab::loadConfig()
         cpu[QStringLiteral("default_affinity")].toString());
 
     const auto mon = m_config[QStringLiteral("monitor")].toObject();
-    m_ruleInterval->setValue(mon[QStringLiteral("rule_interval_ms")].toInt(500));
-    m_displayInterval->setValue(mon[QStringLiteral("display_interval_ms")].toInt(2000));
+    // These keys must match what ProcessMonitor::run() reads. Before 1.5.2 this tab
+    // used "rule_interval_ms"/"display_interval_ms", which nothing read, so
+    // "Apply Intervals" silently did nothing.
+    m_scanInterval->setValue(ProcessMonitor::scanIntervalMs(m_config));
+    m_ruleInterval->setValue(mon[QStringLiteral("rule_enforce_interval_ms")].toInt(500));
+    m_displayInterval->setValue(mon[QStringLiteral("display_refresh_interval_ms")].toInt(2000));
 
     m_systemThemeCb->setChecked(m_config[QStringLiteral("system_theme")].toBool(false));
     m_showTempsCb->setChecked(
@@ -211,8 +232,12 @@ void SettingsTab::applyCpu()
 void SettingsTab::applyMonitor()
 {
     QJsonObject mon = m_config[QStringLiteral("monitor")].toObject();
-    mon[QStringLiteral("rule_interval_ms")]    = m_ruleInterval->value();
-    mon[QStringLiteral("display_interval_ms")] = m_displayInterval->value();
+    mon[QStringLiteral("scan_interval_ms")]            = m_scanInterval->value();
+    mon[QStringLiteral("rule_enforce_interval_ms")]    = m_ruleInterval->value();
+    mon[QStringLiteral("display_refresh_interval_ms")] = m_displayInterval->value();
+    // Drop the dead keys older versions wrote, so config.json stops carrying them.
+    mon.remove(QStringLiteral("rule_interval_ms"));
+    mon.remove(QStringLiteral("display_interval_ms"));
     m_config[QStringLiteral("monitor")] = mon;
     emit settingsChanged(m_config);
 }

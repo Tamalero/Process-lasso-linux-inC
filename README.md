@@ -4,6 +4,21 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.5.2
+
+**Adjustable scan interval, and a quarter of the CPU use.** The app used to re-read
+every process ten times a second. That is now **Settings → Monitor Intervals →
+Process scan interval**, from 500 ms (the new default) to 30 s. At the default the
+background scanner uses about a quarter of the CPU it did. A long interval never
+makes the app slow to quit or to react — Refresh, Reset and Gaming Mode wake it.
+
+**Fixed: slow memory growth on KDE.** The tray icon was redrawn every refresh, and
+KDE's tray service keeps a copy of every icon it is given — about 4 MB an hour.
+Icons are now drawn once and reused.
+
+**Fixed: the Monitor Intervals settings never did anything.** They were saved under
+names the monitor never read.
+
 ## What's New in 1.5.1
 
 Full history in [CHANGELOG.md](CHANGELOG.md).
@@ -398,6 +413,7 @@ The file is written atomically (write to `.tmp`, then rename) to prevent corrupt
     "gaming_profiles": {}
   },
   "monitor": {
+    "scan_interval_ms": 500,             // how often /proc is re-read; 500–30000
     "rule_enforce_interval_ms": 500,
     "display_refresh_interval_ms": 2000
   },
@@ -873,7 +889,7 @@ Rules are stored as a JSON array in `config.json`. Each rule has a UUID (`rule_i
 | `exact` | `procName == pattern` |
 | `regex` | `QRegularExpression(pattern).match(procName).hasMatch()` |
 
-**Application cadence:** Rules are applied to every new PID on first detection, then re-applied to all known PIDs on every `rule_enforce_interval_ms` tick (default 500 ms). Rules are suppressed for a PID during a 30-second manual override window after a manual affinity change.
+**Application cadence:** The process list is re-read every `scan_interval_ms` (default 500 ms, adjustable from 500 ms to 30 s in **Settings → Monitor Intervals**). Rules are applied to every new PID on the first scan that sees it, then re-applied to all known PIDs every `rule_enforce_interval_ms` (default 500 ms) — but never more often than the scan interval. A longer scan interval uses less CPU, at the cost of a new process running unruled for up to that long. Rules are suppressed for a PID during a 30-second manual override window after a manual affinity change.
 
 **Affinity application:** `sched_setaffinity` is called on the main thread *and* all TIDs found in `/proc/[pid]/task/`.
 
@@ -1001,7 +1017,7 @@ main.cpp  (single-instance guard → QLocalServer → MainWindow)
        ├─ SettingsTab          — App settings
        └─ Log QTextEdit
             │
-            ├─ ProcessMonitor (QThread) ── reads /proc every 100 ms
+            ├─ ProcessMonitor (QThread) ── reads /proc every scan_interval_ms (500 ms–30 s)
             │    ├─ RuleEngine           ── applied every 500 ms; isPbExempt() for PB
             │    └─ ProBalance           ── ticked every 1 s with merged exempt PID set
             │

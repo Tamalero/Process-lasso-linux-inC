@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <atomic>
+#include <condition_variable>
 
 class ProcessMonitor : public QThread {
     Q_OBJECT
@@ -17,6 +18,14 @@ public:
                    ProBalance *proBalance,
                    const QJsonObject &config,
                    QObject *parent = nullptr);
+
+    // Scan interval bounds (config "monitor.scan_interval_ms"). Each scan reads
+    // every process in /proc; at the old hard-coded 100 ms that was ~750k heap
+    // allocations a second (heaptrack, 2026-10-01).
+    static constexpr int SCAN_MIN_MS     = 500;
+    static constexpr int SCAN_MAX_MS     = 30000;
+    static constexpr int SCAN_DEFAULT_MS = 500;
+    static int scanIntervalMs(const QJsonObject &config);
 
     void stop();
     void updateConfig(const QJsonObject &config);
@@ -86,6 +95,16 @@ private:
     bool          m_gamingReqActive    = false;
     bool          m_gamingReqNice      = false;
     QSet<int>     m_throttledPub;      // published copy of ProBalance::throttledPids()
+    // run() sleeps on this between scans so a long interval never delays quitting
+    // or a GUI request. m_wakePending (guarded by m_configMux) closes the window
+    // where a request lands while a scan is in progress.
+    // std::condition_variable_any rather than QWaitCondition: it unlocks and
+    // relocks m_configMux through QMutex's own (TSan-annotated) inline calls.
+    // QWaitCondition does it inside the uninstrumented Qt library, which made
+    // ThreadSanitizer believe both threads held the mutex at once.
+    std::condition_variable_any m_wakeCond;
+    bool          m_wakePending = false;
+    void          wakeLocked() { m_wakePending = true; m_wakeCond.notify_all(); }
     // Set by updateConfig(); consumed by run() on the monitor thread, which is
     // the only thread allowed to write ProBalance's config (it has no mutex).
     bool          m_pbConfigDirty = true;  // guarded by m_configMux

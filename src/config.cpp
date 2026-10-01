@@ -33,6 +33,7 @@ QJsonObject defaultConfig()
     QJsonObject monitor;
     monitor[QStringLiteral("display_refresh_interval_ms")] = 2000;
     monitor[QStringLiteral("rule_enforce_interval_ms")]    = 500;
+    monitor[QStringLiteral("scan_interval_ms")]            = 500;  // 500–30000
 
     QJsonObject cpu;
     cpu[QStringLiteral("default_affinity")] = QJsonValue::Null;

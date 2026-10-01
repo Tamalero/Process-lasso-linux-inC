@@ -2,6 +2,28 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.5.2] — 2026-10-01
+
+### Added — adjustable process scan interval; about a quarter of the CPU use
+
+The app re-read every running process ten times a second, which was most of its
+own CPU use. **Settings → Monitor Intervals → Process scan interval** now sets
+this, from 500 ms (the new default) to 30 s. At the default the background scanner
+measured 3.0 % of a core, down from 12.4 %. A long interval does not make the app
+slow to quit or to respond: Refresh & Reapply, Reset and Gaming Mode wake it at once.
+A new process is noticed, and gets its rule, up to one interval after it starts.
+
+### Fixed — memory grew about 4 MB an hour on KDE
+
+The tray icon was redrawn on every refresh, and KDE's tray service keeps a copy of
+every icon it is handed until the app exits. The ≤ 69 distinct icons are now drawn
+once and reused, and the icon is only updated when it actually changes.
+
+### Fixed — the Monitor Intervals settings had no effect
+
+"Rule enforcement interval" and "Display refresh interval" were saved under names
+the monitor never read, so changing them did nothing. They now work.
+
 ## [1.5.1] — 2026-09-30
 
 ### Fixed — crashes and wrong values from the GUI and monitor threads racing

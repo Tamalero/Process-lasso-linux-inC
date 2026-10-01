@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <mutex>
 #include <limits>
 
 using namespace std::chrono;
@@ -36,12 +37,25 @@ ProcessMonitor::ProcessMonitor(RuleEngine *re, ProBalance *pb,
 
 void ProcessMonitor::emitLog(const QString &msg) { emit logMessage(msg); }
 
-void ProcessMonitor::stop() { m_stop = true; }
+int ProcessMonitor::scanIntervalMs(const QJsonObject &config)
+{
+    const int v = config[QStringLiteral("monitor")].toObject()
+                      [QStringLiteral("scan_interval_ms")].toInt(SCAN_DEFAULT_MS);
+    return qBound(SCAN_MIN_MS, v, SCAN_MAX_MS);
+}
+
+void ProcessMonitor::stop()
+{
+    QMutexLocker lk(&m_configMux);
+    m_stop = true;
+    wakeLocked();
+}
 
 void ProcessMonitor::updateConfig(const QJsonObject &cfg)
 {
     QMutexLocker lk(&m_configMux);
     m_config = cfg;
+    wakeLocked();   // a shorter scan interval takes effect now, not after the old one
     // Do NOT push this into ProBalance from here: updateConfig() is called from
     // the GUI thread, ProBalance has no mutex, and run() reads its config while
     // ticking. run() picks the change up on the monitor thread instead.
@@ -141,12 +155,14 @@ void ProcessMonitor::reapplyAllDefaults()
 {
     QMutexLocker lk(&m_configMux);
     m_reapplyDefaultsReq = true;
+    wakeLocked();
 }
 
 void ProcessMonitor::resetAllAffinities()
 {
     QMutexLocker lk(&m_configMux);
     m_resetAffinitiesReq = true;
+    wakeLocked();
 }
 
 QSet<int> ProcessMonitor::throttledPids() const
@@ -196,6 +212,7 @@ void ProcessMonitor::setGamingMode(bool active, bool elevateNice)
     m_gamingReq       = true;
     m_gamingReqActive = active;
     m_gamingReqNice   = elevateNice;
+    wakeLocked();
 }
 
 void ProcessMonitor::setManualOverride(int pid, double durationSeconds)
@@ -224,12 +241,14 @@ void ProcessMonitor::reapplyRulesNow()
 {
     QMutexLocker lk(&m_configMux);
     m_forceEnforce = true;
+    wakeLocked();
 }
 
 void ProcessMonitor::setSafeMode(bool on)
 {
     QMutexLocker lk(&m_configMux);
     m_safeMode = on;
+    wakeLocked();
 }
 
 // ── /proc readers ──────────────────────────────────────────────────────────────
@@ -334,7 +353,6 @@ QList<double> ProcessMonitor::readPercpuUsage()
 
 void ProcessMonitor::run()
 {
-    const long long tickMs = 100;
 
     auto cfgCopy = [&]{
         QMutexLocker lk(&m_configMux);
@@ -350,7 +368,8 @@ void ProcessMonitor::run()
 
     while (!m_stop) {
         try {
-            const double now = (double)nowNs() / 1e9;
+            const qint64 loopStartNs = nowNs();
+            const double now = (double)loopStartNs / 1e9;
             const auto   cfg = cfgCopy();
             const double enforceInterval = cfg[QStringLiteral("monitor")]
                 .toObject()[QStringLiteral("rule_enforce_interval_ms")].toDouble(500) / 1000.0;
@@ -574,7 +593,23 @@ void ProcessMonitor::run()
                 lastSnapshot = now;
             }
 
-            QThread::msleep(tickMs);
+            // ── Sleep until the next scan, or until woken ─────────────────────
+            // One scan per scan_interval_ms (500 ms–30 s). Rule enforcement and
+            // the display refresh keep their own intervals but can only happen
+            // on a scan, so the effective rate is the slower of the two.
+            const qint64 elapsedMs = (nowNs() - loopStartNs) / 1000000;
+            {
+                std::unique_lock<QMutex> lk(m_configMux);
+                const qint64 waitMs = scanIntervalMs(m_config) - elapsedMs;
+                if (waitMs > 0)
+                    m_wakeCond.wait_for(lk, std::chrono::milliseconds(waitMs),
+                                        [this]{ return m_stop || m_wakePending; });
+                m_wakePending = false;
+            }
+            // Floor between scans even when woken: dragging a settings slider
+            // saves config on every step and must not turn into a scan storm.
+            const qint64 sinceStartMs = (nowNs() - loopStartNs) / 1000000;
+            if (!m_stop && sinceStartMs < 100) QThread::msleep(100 - sinceStartMs);
         } catch (...) {
             QThread::msleep(1000);
         }

@@ -18,6 +18,7 @@
 #include <QMenu>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QHash>
 #include <QPainter>
 #include <QPixmap>
 #include <QScrollBar>
@@ -30,18 +31,42 @@
 
 // ---------- helpers ----------
 
+// The tray icon is a 22-px bar: 23 fill levels × 3 colour bands = at most 69
+// distinct pictures. Each is painted ONCE and reused.
+//
+// ☠️ Do not go back to painting a fresh icon per refresh. On KDE the tray goes
+// through KStatusNotifierItem::setIconByPixmap(), which keeps data from every
+// icon it is handed until the app exits: ~2.6 KB per update, ~4 MB/hour at the
+// 2 s refresh (heaptrack + a standalone tray test, 2026-10-01). Reusing cached
+// icons and skipping unchanged updates cut that to ~40 B per actual change.
+static int trayIconKey(double cpuPct)
+{
+    const int filled = qBound(0, static_cast<int>(22 * cpuPct / 100.0), 22);
+    const int band   = cpuPct > 80 ? 2 : cpuPct > 40 ? 1 : 0;
+    return filled * 3 + band;
+}
+
 static QIcon makeTrayIcon(double cpuPct)
 {
+    static QHash<int, QIcon> cache;
+    const int key = trayIconKey(cpuPct);
+    if (const auto it = cache.constFind(key); it != cache.cend()) return *it;
+
+    const int filled = key / 3, band = key % 3;
     QPixmap pm(22, 22);
     pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing);
-    const int filled = static_cast<int>(22 * cpuPct / 100.0);
-    p.fillRect(0, 22 - filled, 22, filled,
-               cpuPct > 80 ? Qt::red : cpuPct > 40 ? QColor(QStringLiteral("#f9e2af")) : Qt::green);
-    p.setPen(Qt::white);
-    p.drawRect(0, 0, 21, 21);
-    return QIcon(pm);
+    {
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.fillRect(0, 22 - filled, 22, filled,
+                   band == 2 ? QColor(Qt::red)
+                 : band == 1 ? QColor(QStringLiteral("#f9e2af")) : QColor(Qt::green));
+        p.setPen(Qt::white);
+        p.drawRect(0, 0, 21, 21);
+    }   // end painting first, so QIcon shares the pixmap instead of deep-copying it
+    const QIcon icon(pm);
+    cache.insert(key, icon);
+    return icon;
 }
 
 // ---------- ctor / dtor ----------
@@ -600,7 +625,11 @@ void MainWindow::onCpuForTray(const QList<double> &percpu)
     double sum = 0;
     for (double v : percpu) sum += v;
     const double avg = sum / percpu.size();
-    m_tray->setIcon(makeTrayIcon(avg));
+    // Only when the picture actually changes — see makeTrayIcon().
+    if (const int key = trayIconKey(avg); key != m_trayIconKey) {
+        m_trayIconKey = key;
+        m_tray->setIcon(makeTrayIcon(avg));
+    }
     QString tip = QStringLiteral("Process Lasso Qt — CPU: %1%").arg(avg, 0, 'f', 1);
     if (m_haveCpuTemp)
         tip += QStringLiteral(" · %1°C").arg(qRound(m_lastCpuTempC));

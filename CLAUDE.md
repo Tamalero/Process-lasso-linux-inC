@@ -2,7 +2,7 @@
 
 C++17/Qt6 Linux process manager for CachyOS/Arch. Replaces a Python/PyQt6 upstream with
 direct syscalls. No Python, no psutil, no subprocess (except the privileged helper).
-Current version: **1.5.2**.
+Current version: **1.5.3**.
 
 ---
 
@@ -40,6 +40,8 @@ tests/
   ruleengine-harness.cpp— asserts rule enforcement is SILENT once values match
   monitor-harness.cpp   — drives ProcessMonitor headless: rule apply + manual override
   race-harness.cpp      — GUI/monitor races under ThreadSanitizer (see Thread-safety rules)
+  scan-interval-harness.cpp — scan_interval_ms clamping, wake-on-request, prompt stop()
+  release-harness.cpp   — a deleted/disabled rule gives back affinity, nice, ionice
 helper/
   main.cpp              — privileged C binary (no Qt), commands below
 packaging/
@@ -54,7 +56,7 @@ packaging/
 
 ## Branches
 
-`main` is the released line (currently 1.5.2). One feature lives off it:
+`main` is the released line (currently 1.5.3). One feature lives off it:
 
 **`fan-control`** — hwmon PWM fan control (Fan Control tab, curve editor, six
 new privileged-helper commands). ⚠️ That branch's own docs still call itself
@@ -958,9 +960,24 @@ on every click, so this race was no longer theoretical.
 
 ### Testing exemptions without launching the app
 
-`tests/` holds three standalone harnesses, none of them in the CMake build; each
-carries its own `g++` line in its header comment. `monitor-harness.cpp` needs a
-`moc` pass on `processmonitor.h` (it is a QObject) — the header says how.
+`tests/` holds six standalone harnesses, none of them in the CMake build; each
+carries its own `g++` line in its header comment. Every one that builds
+`ProcessMonitor` needs a `moc` pass on `processmonitor.h` (it is a QObject) — the
+headers say how. Run all six after touching `processmonitor.*` or `ruleengine.*`.
+
+**Measuring the real app (memory / CPU), learned 2026-10-01:**
+- Build `RelWithDebInfo` **outside the repo** (the AppImage binary is stripped, so
+  heaptrack shows bare addresses), then `heaptrack -o <file> <binary>` with Cesar's
+  own instance **stopped** — single-instance guard. It applies his real rules, so it
+  is the same side effect as normal use, but ask first. Stop it with `SIGTERM`
+  (clean shutdown path); heaptrack then auto-opens `heaptrack_gui` on his desktop.
+- `heaptrack_print -M <massif>` gives heap-over-time; bin it by time to tell
+  **growth** (heap rising) from **fragmentation** (RSS rising, heap flat). `RssAnon`
+  alone misleads — part of the process may be in swap; add `VmSwap`.
+- AddressSanitizer RSS climbs by design (quarantine); judge leaks by LSan's report
+  and trends on a normal `-O2` build. ThreadSanitizer always reports a `QThread`
+  "thread leak" and `~ProcessMonitor`-after-`wait()` races: Qt-internal artefacts,
+  identical on 1.5.0. Anything else it reports is real until proven otherwise.
 
 `tests/probalance-harness.cpp` — 29 checks over the state machine and the exempt-list
 rules. Not in the CMake build; the `g++` line is in its header comment. It stubs
@@ -1137,8 +1154,8 @@ No Python. No Qt5. No extra Qt6 modules beyond `Widgets`.
 ```bash
 cd process-lasso-qt
 bash packaging/build-appimage.sh
-# Outputs: process-lasso-qt-1.5.2-x86_64.AppImage  (~68 MB)
-#          process-lasso-qt-1.5.2-x86_64.AppImage.zsync  (~238 KB)
+# Outputs: process-lasso-qt-1.5.3-x86_64.AppImage  (~68 MB)
+#          process-lasso-qt-1.5.3-x86_64.AppImage.zsync  (~238 KB)
 ```
 
 `packaging/build-appimage.sh` is a self-contained build script:
@@ -1326,8 +1343,8 @@ This ensures Wine/Proton games match rules written for their Windows executable 
 
 ## Gaming Mode profiles
 
-Stored under `config["cpu"]["gaming_profiles"]` as a JSON object keyed by profile name.
-Each profile value is a JSON object with at minimum `{ "affinity": "...", "parkCpus": [...] }`.
+Stored under `config["gaming_mode"]["profiles"]`, keyed by profile name; each value is
+`{ game_name, command, cpu_states: { "<cpu>": bool }, elevate_nice }`.
 
 `GamingModeTab::refreshProfilesCombo()` reads these keys into `m_profileCombo`.  
 `GamingModeTab::saveProfile()` writes current UI state to the profile key, emits `configChanged`.  
@@ -1430,6 +1447,41 @@ real keys, and Apply strips the dead ones from config.json. Same class as 1.4.9:
 **a GUI control is only real if something reads the key it writes** — grep for it.
 ⚠️ Still open: Settings' "apply default affinity" checkbox (`apply_default_affinity`)
 is also not read — `ProcessMonitor::defaultAffinity()` only checks the string.
+
+## Deleting a rule gives back what it set (v1.5.3, 2026-10-01)
+
+Reported as *"deleted rules are still applied and come back after a restart"*. The
+config was fine — the deleted rules were gone from `config.json`. What persisted was
+their **effect**: nothing ever undid a rule, so every process it had touched stayed
+pinned/reniced until it exited, and on the next start that pin looked like the
+process's own. Seen live: Chromium on `8,16-31` with no rule for it.
+
+- `RuleEngine` records per pid what each attribute was before a rule first wrote it
+  (`m_ownedAffinity` / `m_ownedNice` / `m_ownedIoNice`, monitor thread only, pruned by
+  `forgetDeadPids()` each loop). **An already-correct value is recorded too**, with an
+  unknown original: that is how every child of a pinned browser is born.
+- `releaseUnclaimed()` runs from `doReapplyAllDefaults()` (i.e. on every
+  `rulesChanged`) for each pid no enabled matching rule still claims. Affinity →
+  default affinity if set, else the original, else every CPU; nice → original else 0;
+  ionice → original else class 0. **Skipped if the current value is no longer what the
+  rule set** — the user or the program changed it, and that is theirs. Logs one summary
+  line, never one per process (the 1.4.1 flood).
+- `orig` is first-write-wins: an edited-then-deleted rule restores the value from
+  before *any* rule, not the pre-edit one. A mask read while CPUs are parked is never
+  kept as an original (same reason as `captureOriginal()`).
+- Not covered: a process pinned by a *previous session* whose rule was then deleted
+  before this session started — there is no rule to release. Restart the process.
+- `tests/release-harness.cpp` — 20 checks.
+
+**Tabs send only their own config sections.** `GamingModeTab` and `SettingsTab` each
+hold a copy of the whole config taken at startup and used to emit all of it, so saving
+a gaming profile put back the start-up ProBalance settings and exemptions.
+`MainWindow::onSettingsChanged()` now **replaces whole top-level sections** from what
+it is given; a tab must send complete sections, and only the ones it owns.
+
+**Autostart unit** now uses `$APPIMAGE`. `applicationFilePath()` inside an AppImage is
+the `/tmp/.mount_XXXX` FUSE path, gone by the next login → `203/EXEC` every boot.
+Existing units keep the bad path until the Autostart box is toggled off and on.
 
 ## Thread-safety rules (v1.5.1, 2026-09-30)
 

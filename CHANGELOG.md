@@ -2,6 +2,31 @@
 
 All notable changes to Process Lasso Qt.
 
+## [1.5.3] — 2026-10-01
+
+### Fixed — deleting a rule left it in effect
+
+Deleting, disabling or re-pointing a rule never undid what it had set: every process
+it had touched kept its CPU affinity, priority and I/O priority until that process
+exited — and after a restart the app could not tell that pin from the process's own.
+A rule that stops covering a process now gives the setting back: affinity to the
+default affinity if one is set, otherwise to what the process had before (or every
+CPU), and priorities to what they were before. A value someone changed by hand since
+is left alone. The Log reports one summary line.
+
+### Fixed — saving a gaming profile reverted other settings
+
+The Gaming Mode and Settings tabs sent back their whole copy of the configuration,
+taken when the app started. Saving or deleting a gaming profile could silently put
+back the ProBalance settings and exemptions from start-up. Each tab now sends only
+its own settings.
+
+### Fixed — "Start with desktop session" never started the AppImage
+
+The autostart service pointed at the AppImage's temporary mount, which is gone by the
+next login, so it failed on every boot. It now points at the AppImage file. Untick and
+re-tick the box once to rewrite an existing service.
+
 ## [1.5.2] — 2026-10-01
 
 ### Added — adjustable process scan interval; about a quarter of the CPU use

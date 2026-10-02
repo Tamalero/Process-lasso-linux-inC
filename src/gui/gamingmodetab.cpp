@@ -428,7 +428,9 @@ void GamingModeTab::saveProfile()
     profiles[name.trimmed()] = profile;
     gm[QStringLiteral("profiles")] = profiles;
     m_config[QStringLiteral("gaming_mode")] = gm;
-    emit configChanged(m_config);
+    // Only the section this tab owns. m_config is a copy taken at startup, so
+    // its rules, ProBalance and Settings sections are stale.
+    emit configChanged(QJsonObject{{ QStringLiteral("gaming_mode"), gm }});
     refreshProfilesCombo(name.trimmed());
     appendLog(QStringLiteral("[Profile] Saved '%1'").arg(name.trimmed()));
 }
@@ -467,7 +469,9 @@ void GamingModeTab::deleteProfile()
     profiles.remove(name);
     gm[QStringLiteral("profiles")] = profiles;
     m_config[QStringLiteral("gaming_mode")] = gm;
-    emit configChanged(m_config);
+    // Only the section this tab owns. m_config is a copy taken at startup, so
+    // its rules, ProBalance and Settings sections are stale.
+    emit configChanged(QJsonObject{{ QStringLiteral("gaming_mode"), gm }});
     refreshProfilesCombo();
 }
 

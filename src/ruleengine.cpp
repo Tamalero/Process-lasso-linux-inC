@@ -229,8 +229,14 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
                 // Already correct. No syscall, no log line — and whatever was
                 // wrong before evidently is not any more.
                 clearFailure(rule.ruleId, QStringLiteral("affinity"));
+                // Still ours to give back if the rule goes: this is how every
+                // child of a pinned browser is born.
+                ownAffinity(pid, {}, want);
             } else if (Utils::setAffinity(pid, *rule.affinity, &setErr)) {
                 clearFailure(rule.ruleId, QStringLiteral("affinity"));
+                // A mask read while CPUs are parked is truncated — never keep
+                // it as the one to restore (see captureOriginal()).
+                ownAffinity(pid, getOfflineCpuSet().isEmpty() ? have : QSet<int>{}, want);
                 const QString msg = QStringLiteral("[Rule:%1] affinity=%2 → %3(%4)")
                     .arg(rule.name, *rule.affinity, procName).arg(pid);
                 log(msg); actions << msg;
@@ -251,6 +257,7 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
                                           || sessionHelper.contains(rule.ruleId);
                     if (mayEscalate) {
                         if (CpuPark::setAffinityViaHelper(pid, *rule.affinity)) {
+                            ownAffinity(pid, getOfflineCpuSet().isEmpty() ? have : QSet<int>{}, want);
                             // Next pass sees the value already correct and stays
                             // silent, so this logs once per actual change.
                             const QString msg =
@@ -307,11 +314,15 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
             niceDone = true;
             int curNice = 0;
             const bool niceKnown = Utils::getNice(pid, curNice);
+            const std::optional<int> niceBefore =
+                niceKnown ? std::optional<int>(curNice) : std::nullopt;
             if (niceKnown && curNice == *rule.nice) {
                 // Already correct — same reasoning as affinity above.
                 clearFailure(rule.ruleId, QStringLiteral("nice"));
+                ownNice(pid, std::nullopt, *rule.nice);
             } else if (Utils::setNice(pid, *rule.nice)) {
                 clearFailure(rule.ruleId, QStringLiteral("nice"));
+                ownNice(pid, niceBefore, *rule.nice);
                 const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4)")
                     .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
                 log(msg); actions << msg;
@@ -325,6 +336,7 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
                 // on a root-owned process and then fail to set its priority.
                 if (err == EPERM && mayEscalate
                  && CpuPark::setProcessNiceViaHelper(pid, *rule.nice)) {
+                    ownNice(pid, niceBefore, *rule.nice);
                     const QString msg = QStringLiteral("[Rule:%1] nice=%2 → %3(%4) (via privileged helper)")
                         .arg(rule.name).arg(*rule.nice).arg(procName).arg(pid);
                     log(msg); actions << msg;
@@ -348,8 +360,12 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
             if (ioKnown && curClass == *rule.ioniceClass && curLevel == level) {
                 // Already correct — same reasoning as affinity above.
                 clearFailure(rule.ruleId, QStringLiteral("ionice"));
+                ownIoNice(pid, std::nullopt, *rule.ioniceClass, level);
             } else if (Utils::setIoNice(pid, *rule.ioniceClass, level)) {
                 clearFailure(rule.ruleId, QStringLiteral("ionice"));
+                ownIoNice(pid, ioKnown ? std::optional<std::pair<int, int>>({curClass, curLevel})
+                                       : std::nullopt,
+                          *rule.ioniceClass, level);
                 const QString msg = QStringLiteral("[Rule:%1] ionice class=%2 level=%3 → %4(%5)")
                     .arg(rule.name).arg(*rule.ioniceClass).arg(level).arg(procName).arg(pid);
                 log(msg); actions << msg;
@@ -362,6 +378,108 @@ QStringList RuleEngine::applyToProcess(int pid, const QString &procName, const Q
         }
     }
     return actions;
+}
+
+// First write wins for `orig`: later passes only move `set`, so an edited rule
+// still restores what the process had before ANY rule touched it.
+void RuleEngine::ownAffinity(int pid, const QSet<int> &before, const QSet<int> &set)
+{
+    auto it = m_ownedAffinity.find(pid);
+    if (it == m_ownedAffinity.end()) m_ownedAffinity.insert(pid, { before, set });
+    else                             it->set = set;
+}
+
+void RuleEngine::ownNice(int pid, std::optional<int> before, int set)
+{
+    auto it = m_ownedNice.find(pid);
+    if (it == m_ownedNice.end()) m_ownedNice.insert(pid, { before, set });
+    else                         it->set = set;
+}
+
+void RuleEngine::ownIoNice(int pid, std::optional<std::pair<int, int>> before, int cls, int lvl)
+{
+    auto it = m_ownedIoNice.find(pid);
+    if (it == m_ownedIoNice.end()) m_ownedIoNice.insert(pid, { before, cls, lvl });
+    else                           { it->cls = cls; it->lvl = lvl; }
+}
+
+int RuleEngine::releaseUnclaimed(int pid, const QString &procName, const QString &cmdline,
+                                 const QString &defaultAffinity)
+{
+    const bool ownsAff  = m_ownedAffinity.contains(pid);
+    const bool ownsNice = m_ownedNice.contains(pid);
+    const bool ownsIo   = m_ownedIoNice.contains(pid);
+    if (!ownsAff && !ownsNice && !ownsIo) return 0;
+
+    // Claimed by ANY enabled matching rule, not just the first: a surviving rule
+    // keeps the attribute and applyToProcess() moves it to the new value.
+    bool wantsAff = false, wantsNice = false, wantsIo = false;
+    QList<Rule> rules; snapshot(rules);
+    for (const auto &r : std::as_const(rules)) {
+        if (!r.matches(procName, cmdline)) continue;
+        wantsAff  |= r.affinity.has_value();
+        wantsNice |= r.nice.has_value();
+        wantsIo   |= r.ioniceClass.has_value();
+    }
+
+    // In every branch the record is dropped whether or not the write works:
+    // retrying a failing restore on every rule change would be its own flood.
+    // And if the current value is no longer what the rule set, someone else —
+    // the user, the program itself — has changed it since; that is theirs.
+    int restored = 0;
+    if (ownsAff && !wantsAff) {
+        const OwnedAffinity o = m_ownedAffinity.take(pid);
+        const QSet<int> have = Utils::cpulistToSet(Utils::getAffinityStr(pid));
+        if (have == o.set) {
+            QSet<int> target = defaultAffinity.isEmpty()
+                ? o.orig : Utils::cpulistToSet(defaultAffinity);
+            if (target.isEmpty())
+                for (int i = 0; i < Utils::getCpuCount(); ++i) target.insert(i);
+            const QString list = Utils::cpusetToCpulist(target);
+            if (target != have && Utils::setAffinity(pid, list)) {
+                ++restored;
+                VLOG("release: affinity %s -> %s(%d)", qPrintable(list),
+                     qPrintable(procName), pid);
+            }
+        }
+    }
+    if (ownsNice && !wantsNice) {
+        const OwnedNice o = m_ownedNice.take(pid);
+        int cur = 0;
+        // Unknown original: 0 is what every process starts at.
+        const int target = o.orig.value_or(0);
+        if (Utils::getNice(pid, cur) && cur == o.set && cur != target
+         && Utils::setNice(pid, target)) {
+            ++restored;
+            VLOG("release: nice %d -> %s(%d)", target, qPrintable(procName), pid);
+        }
+    }
+    if (ownsIo && !wantsIo) {
+        const OwnedIoNice o = m_ownedIoNice.take(pid);
+        int cls = 0, lvl = 0;
+        // Unknown original: class 0 ("none") — I/O priority follows nice again.
+        const auto target = o.orig.value_or(std::pair<int, int>{ 0, 0 });
+        if (Utils::getIoNice(pid, cls, lvl) && cls == o.cls && lvl == o.lvl
+         && std::pair<int, int>{ cls, lvl } != target
+         && Utils::setIoNice(pid, target.first, target.second)) {
+            ++restored;
+            VLOG("release: ionice %d/%d -> %s(%d)", target.first, target.second,
+                 qPrintable(procName), pid);
+        }
+    }
+    return restored;
+}
+
+void RuleEngine::forgetDeadPids(const QSet<int> &alive)
+{
+    // A recycled pid must not inherit a dead process's "original" values.
+    const auto prune = [&](auto &hash) {
+        for (auto it = hash.begin(); it != hash.end(); )
+            it = alive.contains(it.key()) ? std::next(it) : hash.erase(it);
+    };
+    prune(m_ownedAffinity);
+    prune(m_ownedNice);
+    prune(m_ownedIoNice);
 }
 
 QHash<QString, QStringList> RuleEngine::shadowedAttributes() const

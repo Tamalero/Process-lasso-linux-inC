@@ -896,9 +896,15 @@ void MainWindow::onGamingModeChanged(bool active, bool elevateNice)
                      : QStringLiteral("Gaming mode disabled"));
 }
 
+// `updated` holds only the top-level sections the sender owns, each complete.
+// Senders used to pass their entire config copy — taken at startup and never
+// refreshed — so saving a gaming profile quietly put back whatever ProBalance
+// settings and exemptions were in force when the app started. Replace whole
+// sections rather than deep-merging, so keys a tab drops really go.
 void MainWindow::onSettingsChanged(QJsonObject updatedConfig)
 {
-    m_config = Config::deepMerge(m_config, updatedConfig);
+    for (auto it = updatedConfig.constBegin(); it != updatedConfig.constEnd(); ++it)
+        m_config[it.key()] = it.value();
     m_monitor->updateConfig(m_config);
     m_settingsTab->updateConfig(m_config);
     applyTheme();

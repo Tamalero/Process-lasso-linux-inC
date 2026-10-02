@@ -151,7 +151,11 @@ SettingsTab::SettingsTab(const QJsonObject &cfg, QWidget *parent)
         cfg[QStringLiteral("window_opacity")]    = m_opacitySlider->value();
         cfg[QStringLiteral("show_temperatures")] = m_showTempsCb->isChecked();
         m_config = cfg;
-        emit settingsChanged(cfg);
+        // Only the keys this tab owns — see onSettingsChanged().
+        emit settingsChanged(QJsonObject{
+            { QStringLiteral("system_theme"),      cfg[QStringLiteral("system_theme")] },
+            { QStringLiteral("window_opacity"),    cfg[QStringLiteral("window_opacity")] },
+            { QStringLiteral("show_temperatures"), cfg[QStringLiteral("show_temperatures")] }});
     });
     appForm->addRow(appApply);
     layout->addWidget(appGroup);
@@ -226,7 +230,7 @@ void SettingsTab::applyCpu()
     cpu[QStringLiteral("apply_default_affinity")] = m_defaultAffinityCb->isChecked();
     cpu[QStringLiteral("default_affinity")]        = m_defaultAffinityEdit->text().trimmed();
     m_config[QStringLiteral("cpu")] = cpu;
-    emit settingsChanged(m_config);
+    emit settingsChanged(QJsonObject{{ QStringLiteral("cpu"), cpu }});
 }
 
 void SettingsTab::applyMonitor()
@@ -239,7 +243,7 @@ void SettingsTab::applyMonitor()
     mon.remove(QStringLiteral("rule_interval_ms"));
     mon.remove(QStringLiteral("display_interval_ms"));
     m_config[QStringLiteral("monitor")] = mon;
-    emit settingsChanged(m_config);
+    emit settingsChanged(QJsonObject{{ QStringLiteral("monitor"), mon }});
 }
 
 void SettingsTab::applyAutostart()
@@ -256,13 +260,18 @@ void SettingsTab::applyAutostart()
             m_autostartCb->blockSignals(false);
             return;
         }
-        const QString exe = QCoreApplication::applicationFilePath();
+        // Inside an AppImage applicationFilePath() is the /tmp/.mount_XXXX
+        // FUSE mount, which is gone by the next login — the unit then fails with
+        // 203/EXEC every boot. The runtime exports the real file as $APPIMAGE.
+        const QString appImage = qEnvironmentVariable("APPIMAGE");
+        const QString exe = appImage.isEmpty()
+            ? QCoreApplication::applicationFilePath() : appImage;
         f.write(QStringLiteral(
             "[Unit]\n"
             "Description=Process Lasso Qt\n"
             "After=graphical-session.target\n\n"
             "[Service]\n"
-            "ExecStart=%1\n"
+            "ExecStart=\"%1\"\n"   // quoted: the path may contain spaces
             "Restart=on-failure\n\n"
             "[Install]\n"
             "WantedBy=default.target\n"

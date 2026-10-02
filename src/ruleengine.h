@@ -100,6 +100,19 @@ public:
     // is already correct also returns nothing.
     bool matchesAny(const QString &procName, const QString &cmdline = QString()) const;
 
+    // Give back what a rule set on `pid` once no enabled rule claims that
+    // attribute any more — the rule was deleted, disabled or re-pointed.
+    // Without this a deleted rule kept pinning every process it had touched
+    // until that process exited, which looks exactly like the delete failing.
+    // Affinity goes back to `defaultAffinity` if set, else the mask the process
+    // had before, else every CPU; nice/ionice to what it had before, else 0 /
+    // class "none". Nothing is touched if the value was changed by someone
+    // else since. Returns the number of attributes restored. Monitor thread only.
+    int releaseUnclaimed(int pid, const QString &procName, const QString &cmdline,
+                         const QString &defaultAffinity);
+    // Drop ownership records for pids that no longer exist. Monitor thread only.
+    void forgetDeadPids(const QSet<int> &alive);
+
 private:
     mutable QMutex m_rulesMux;          // guards m_rules and m_sessionHelper
     QList<Rule> m_rules;
@@ -114,6 +127,21 @@ private:
     EscalationCb  m_escalationCb;
     QSet<QString> m_escalationAsked;   // ruleId — asked once per session, answer or not
     QSet<QString> m_sessionHelper;     // ruleId — allowed for this run only; m_rulesMux
+
+    // What a rule has set on each pid, and what was there before, so
+    // releaseUnclaimed() can undo it. An empty orig / nullopt means unknown:
+    // the value was already right when first seen (inherited from a pinned
+    // parent, or set by a previous session) or was read while CPUs were parked.
+    // Monitor thread only, like the dedupe sets.
+    struct OwnedAffinity { QSet<int> orig, set; };
+    struct OwnedNice     { std::optional<int> orig; int set = 0; };
+    struct OwnedIoNice   { std::optional<std::pair<int, int>> orig; int cls = 0, lvl = 0; };
+    QHash<int, OwnedAffinity> m_ownedAffinity;
+    QHash<int, OwnedNice>     m_ownedNice;
+    QHash<int, OwnedIoNice>   m_ownedIoNice;
+    void ownAffinity(int pid, const QSet<int> &before, const QSet<int> &set);
+    void ownNice(int pid, std::optional<int> before, int set);
+    void ownIoNice(int pid, std::optional<std::pair<int, int>> before, int cls, int lvl);
 
     // Consistent copy for a monitor-thread pass.
     void snapshot(QList<Rule> &rules, QSet<QString> *sessionHelper = nullptr) const;

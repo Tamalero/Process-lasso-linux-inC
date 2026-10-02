@@ -4,6 +4,23 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
+## What's New in 1.5.3
+
+**Fixed: deleting a rule left it in effect.** Deleting, disabling or changing a rule
+never undid what it had already set, so every process it had touched kept its cores
+and priority until it exited — which looked exactly like the delete had not worked.
+A process no longer covered by any rule now gets its settings back: affinity to your
+default affinity if you set one, otherwise to what it had before (or every CPU), and
+its priorities to what they were. Anything you changed by hand since is left alone.
+
+**Fixed: saving a gaming profile could undo other settings.** The Gaming Mode and
+Settings tabs saved their start-up copy of the whole configuration, which could
+silently put back old ProBalance settings and exemptions.
+
+**Fixed: "Start with desktop session" never worked from the AppImage.** The service
+pointed at the AppImage's temporary mount. Untick and re-tick it once to repair an
+existing one.
+
 ## What's New in 1.5.2
 
 **Adjustable scan interval, and a quarter of the CPU use.** The app used to re-read

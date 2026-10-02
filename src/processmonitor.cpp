@@ -177,6 +177,21 @@ QSet<int> ProcessMonitor::throttledPids() const
 void ProcessMonitor::doReapplyAllDefaults(const QList<ProcessInfo> &snapshot)
 {
     const QString def = defaultAffinity();
+    // A rule deleted, disabled or narrowed hands back what it had set. This used
+    // to need a default affinity to do anything at all, and even then never
+    // touched nice or ionice — so a deleted rule went on pinning every process
+    // it had ever matched, until those processes exited.
+    int restored = 0, procs = 0;
+    for (const auto &info : snapshot) {
+        const int n = m_ruleEngine->releaseUnclaimed(info.pid, info.name, info.cmdline, def);
+        if (n) { restored += n; ++procs; }
+    }
+    // One line, not one per process: a browser rule covers ~150 of them.
+    if (restored)
+        emitLog(QStringLiteral("[Rules] Restored %1 setting%2 on %3 process%4 no "
+                               "longer covered by a rule.")
+                    .arg(restored).arg(restored == 1 ? QString() : QStringLiteral("s"))
+                    .arg(procs).arg(procs == 1 ? QString() : QStringLiteral("es")));
     if (def.isEmpty()) return;
     for (const auto &info : snapshot) {
         m_ruleEngine->applyToProcess(info.pid, info.name, info.cmdline);
@@ -448,6 +463,7 @@ void ProcessMonitor::run()
                 if (!currentPids.contains(it.key())) it = m_gamingNiced.erase(it);
                 else ++it;
             }
+            m_ruleEngine->forgetDeadPids(currentPids);
 
             // ── GUI requests, carried out here on the monitor thread ─────────
             bool reqDefaults = false, reqReset = false, reqGaming = false;

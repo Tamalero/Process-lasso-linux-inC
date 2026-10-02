@@ -1233,7 +1233,11 @@ no PR flow on this repo.
    `packaging/PKGBUILD` `pkgver` and the "Current version" line at the top of
    this file.
 2. Update `README.md` (feature table, config schema, relevant section) and this
-   file. Check the AppImage section above for stale example filenames.
+   file. The README keeps **only the latest** "What's New", at the
+   **bottom**, in its last section **Changelog** (Cesar, 2026-10-01) — never at the top.
+   Each release: replace that one subsection with the new version's notes (the old ones
+   already live in `CHANGELOG.md`), and bump the current-version line and its anchor
+   (`CHANGELOG.md#153--2026-10-01` form). Check the AppImage section above for stale example filenames.
 3. `git commit` on `main`, `git push origin main`.
 4. `bash packaging/build-appimage.sh`
 5. `gh release create vX.Y.Z <AppImage> <AppImage>.zsync --target main --title … --notes …`

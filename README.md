@@ -4,258 +4,6 @@ A native C++17/Qt6 process manager for Arch Linux and CachyOS, inspired by the W
 
 ---
 
-## What's New in 1.5.3
-
-**Fixed: deleting a rule left it in effect.** Deleting, disabling or changing a rule
-never undid what it had already set, so every process it had touched kept its cores
-and priority until it exited — which looked exactly like the delete had not worked.
-A process no longer covered by any rule now gets its settings back: affinity to your
-default affinity if you set one, otherwise to what it had before (or every CPU), and
-its priorities to what they were. Anything you changed by hand since is left alone.
-
-**Fixed: saving a gaming profile could undo other settings.** The Gaming Mode and
-Settings tabs saved their start-up copy of the whole configuration, which could
-silently put back old ProBalance settings and exemptions.
-
-**Fixed: "Start with desktop session" never worked from the AppImage.** The service
-pointed at the AppImage's temporary mount. Untick and re-tick it once to repair an
-existing one.
-
-## What's New in 1.5.2
-
-**Adjustable scan interval, and a quarter of the CPU use.** The app used to re-read
-every process ten times a second. That is now **Settings → Monitor Intervals →
-Process scan interval**, from 500 ms (the new default) to 30 s. At the default the
-background scanner uses about a quarter of the CPU it did. A long interval never
-makes the app slow to quit or to react — Refresh, Reset and Gaming Mode wake it.
-
-**Fixed: slow memory growth on KDE.** The tray icon was redrawn every refresh, and
-KDE's tray service keeps a copy of every icon it is given — about 4 MB an hour.
-Icons are now drawn once and reused.
-
-**Fixed: the Monitor Intervals settings never did anything.** They were saved under
-names the monitor never read.
-
-## What's New in 1.5.1
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Stability fix.** Editing a rule while the app was enforcing rules could make the
-two threads collide — ThreadSanitizer caught the monitor reading rules that had
-already been freed, which can crash the app. Rule edits, Reset and Gaming Mode
-changes are now handed safely to the monitor thread. Also fixed: a reused process
-ID could inherit a dead process's saved affinity or priority, and a default
-affinity could briefly override a matching rule.
-
-## What's New in 1.5.0
-
-**Rules can match the command line.** Several processes often share a name — a
-dozen `python3.13` interpreters, every Electron app called `node` — and a rule on
-the name hits all of them. Rules now have a **Match against** setting: *Process
-name* (the default, unchanged for existing rules) or *Command line*, so you can
-target `ComfyUI/main.py` and leave every other python alone.
-
-**The Rules tab shows rules that are failing.** A rule whose setting could not be
-applied used to show a plain "Yes" in the Enabled column — the Log said it was
-failing, the Rules tab said it was fine. It now reads **⚠ Failing**, with the
-specific setting in red and a tooltip explaining why. The mark clears on its own
-once the rule applies successfully.
-
-**Priority now works on processes you do not own.** Affinity escalated to the
-privileged helper when you granted a rule permission; priority never did, so a
-rule could set affinity on a root-owned process and then silently fail to set its
-priority. A priority failure also claimed it was about "CPU affinity".
-
-## What's New in 1.4.9
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Editing a rule works.** If another rule matched the same pattern, editing one
-showed a duplicate warning whose options all discarded your change — so with two
-rules for the same application, editing either reliably did nothing. Editing also
-silently revoked a rule's permission to use the privileged helper.
-
-**Priority and I/O priority failures are no longer silent.** Only affinity
-reported problems; a rule that could not apply its priority looked exactly like a
-rule doing nothing.
-
-**New "Refresh & Reapply Rules" button** in the Rules tab — redraws the tables,
-forces a rule pass, and reports what happened in the Log. Rules are already
-enforced about twice a second, so this is about seeing the result, not making it
-happen sooner.
-
-## What's New in 1.4.8
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Installing the privileged helper from an AppImage now completes.** An AppImage
-is a FUSE mount owned by the user who launched it, and FUSE denies access to
-every other user — including root — so `pkexec` authenticated fine and then could
-not read the installer script. The files are now copied out of the mount first.
-
-## What's New in 1.4.7
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Installing the privileged helper works from the AppImage.** 1.4.6 made the
-failure explain itself, which immediately revealed that *both* search mechanisms
-were wrong: paths relative to the binary assumed `usr/bin`, but the AppImage runs
-a copy of the binary from the mount root; and the XDG lookup searched a directory
-that the installer never writes to. Both fixed, and they now work independently
-of each other.
-
-## What's New in 1.4.6
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**"install-helper.sh not found in data directory" is fixed.** The app only knew
-how to find the installer in an installed layout, so the button failed when
-running from a source build directory. It now looks in the checkout too, and if
-it still cannot find the script it lists every path it searched.
-
-**The window opacity slider no longer pretends to work on Wayland.** Wayland has
-no way for a window to set its own opacity, so the setting was silently ignored —
-it works on X11 and XWayland only. The slider is now disabled there with a note
-pointing at your compositor (on KDE: Alt+scroll over the window).
-
-## What's New in 1.4.5
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Installing the privileged helper now actually works.** The installer looked for
-the helper binary one directory too high, so **Gaming Mode → install helper
-failed every time** from an AppImage or a packaged install. If your helper is
-installed, it got there some other way. It also works from a source checkout
-after a build now, and tells you when it needs root instead of failing with a
-confusing permissions error.
-
-**There is an uninstaller.** `pkexec bash /usr/share/process-lasso-qt/uninstall-helper.sh`
-removes the helper and its sudoers rule, moving both aside into `/var/backups/`
-rather than deleting them. It takes the sudoers rule off first and verifies the
-remaining configuration still parses before going any further, because a broken
-file under `/etc/sudoers.d` locks sudo out for everyone.
-
-## What's New in 1.4.4
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**⚠️ Security: reinstall the privileged helper.** The sudoers rule used to read
-`ALL ALL=(root) NOPASSWD: …`, letting *every local account* run the helper as
-root without a password. It is now scoped to the single user who installs it.
-Existing installations keep the old permissive rule until you reinstall the
-helper from the Gaming Mode tab.
-
-**Rules can now apply affinity to processes you do not own.** Anything running as
-root — a Docker container, say — previously failed silently, because changing
-another user's CPU affinity needs root. You are now asked once per rule whether
-to apply it through the privileged helper, with an option to remember the choice.
-
-**"Failed to set affinity" now tells you why** — whether the process belongs to
-another user (and which), whether the CPUs you asked for are parked, or whether
-the process simply exited.
-
-## What's New in 1.4.3
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Two rules for the same application no longer fight each other.** Nothing
-stopped you adding a second rule for something that already had one — and if the
-two set the same thing to different values, they overwrote each other twice a
-second forever, flooding the Log and bogging the app down. The first matching
-rule now wins for each setting, so an existing duplicate config fixes itself with
-no clean-up. Settings that can never apply are shown struck through in the Rules
-tab, and adding a duplicate warns you first and offers to edit the existing rule
-instead.
-
-## What's New in 1.4.2
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**Edit a rule without leaving the Processes tab.** If a rule already covers the
-process you are editing, a 30-second grace period only delays the inevitable —
-the rule wins, and you have to go to the Rules tab to change it properly. Tick
-**Overwrite matching rules** next to the filter box and the app offers to change
-the rule itself. You are always asked first, and told how many running processes
-that rule affects.
-
-**Manual changes show up immediately, and the dialogs tell the truth.** The
-context-menu dialogs were seeded from the process table, which lags by a couple
-of seconds — so reopening one showed the value from *before* your change and made
-it look like nothing had happened. They now read live values, and the edited row
-repaints at once. The I/O priority dialog was also hardcoded to "class 2, level
-4" and never showed what a process was actually set to.
-
-**Manual priority and I/O priority changes are no longer reverted instantly.**
-Only affinity was being protected from rule re-enforcement; the other two were
-overwritten about half a second later.
-
-## What's New in 1.4.1
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**The app no longer grinds itself to a halt.** Rules were re-applying *and
-re-logging* on every enforcement pass even when nothing needed changing — with
-a handful of rules matching a browser's ~150 processes that is around 300 log
-lines a second on the GUI thread, plus thousands of redundant syscalls. The
-window stopped responding, setting affinity by hand looked like it did nothing,
-and the Log tab was unusable. Rules now check the current value first and stay
-silent when there is nothing to do, so the Log shows only real changes.
-
-**A manual affinity change is no longer reverted straight away.** The 30-second
-protection that keeps your rules from immediately overwriting a manual change
-was being written across threads without a lock, so it could be lost.
-
-## What's New in 1.4.0
-
-Full history in [CHANGELOG.md](CHANGELOG.md).
-
-**"Exempt from ProBalance" actually works now.** Right-clicking a process and
-exempting it used to set a session-only, per-PID flag: nothing saved it, it never
-showed up in the ProBalance tab's exempt list, and it covered one PID — so
-exempting `firefox` left its dozen child processes throttleable, and the whole
-thing vanished on the next launch. Exemptions are now by **name**, and a process
-that was already throttled when you exempt it gets its original priority back
-instead of being stranded at the throttled value for good.
-
-**Two exemption scopes, as checkable ticks.** The context menu now offers
-**This session only** (gone when the app exits, never written to `config.json`)
-and **Permanent** (saved to the ProBalance tab's list) independently. Both show
-their current state, so whether something is exempt — and for how long — is
-visible rather than guessed. Session-exempt processes show `⚡ PB Exempt (session)`.
-
-**A warning about generic patterns.** Exempt patterns match anywhere in a process
-name, so a short entry like `sh` quietly covers `bash`, `sshd` and `plasmashell`,
-and ProBalance stops throttling with nothing in the Log to explain why. The
-ProBalance tab now says so.
-
----
-
-## What's New in 1.3.3
-
-Rolled up 1.3.1 and 1.3.2, which were never published separately.
-
-**Gaming Mode no longer strands your CPUs.** Parked CPUs were never brought back
-when the app exited — `unParkAll()` was reachable only from the Gaming Mode tab,
-so even a clean quit left them offline until you noticed. They are now restored
-on every shutdown Process Lasso can observe, including `SIGTERM` / `SIGINT` /
-`SIGHUP` (systemd stop, logout, Ctrl-C), which previously killed the process
-outright without saving config.
-
-**Crash detection with Safe Mode.** A boot-aware marker records whether the last
-session shut down properly. After 3 unclean starts in a row, rules, default
-affinity and ProBalance stop being applied and a banner offers **Resume Normal**
-— your `config.json` is never modified, only its application is suppressed. The
-marker knows the difference between "crashed just now, CPUs still parked" and
-"crashed, but you have rebooted since and there is nothing left to fix".
-
-**Parking and affinity no longer fight each other.** Original affinities are no
-longer captured while CPUs are parked (which silently narrowed processes for
-good), affinity failures are reported in the Log instead of failing silently,
-and parked CPUs now show in **red** in the affinity picker — still selectable,
-with a warning, since parking is temporary but a rule is permanent.
-
----
-
 ## Table of Contents
 
 1. [Feature Overview](#feature-overview)
@@ -286,7 +34,7 @@ with a warning, since parking is temporary but a rule is permanent.
 20. [Architecture Notes](#architecture-notes)
 21. [Troubleshooting](#troubleshooting)
 22. [Known Limitations](#known-limitations)
-23. [Changelog](CHANGELOG.md)
+23. [Changelog](#changelog)
 
 ---
 
@@ -1085,3 +833,26 @@ Use the Processes tab context menu to exempt a specific running PID instantly, o
 - **Parked CPUs and affinity interact.** A rule or default affinity whose CPUs are *all* parked cannot be applied at all — Process Lasso now says so in the Log instead of failing silently. If only some are parked, the affinity applies to the online remainder and widens automatically once they return.
 - **`SIGKILL` and power loss cannot be caught.** A `SIGKILL` in the same boot is repaired at the next launch by the crash marker (see [Crash Detection](#crash-detection--safe-mode)); a power loss needs no repair, because the reboot brings every CPU back on its own. **Reset All Changes** still works at any time.
 - Restoring on exit uses the app's own notion of ownership, which counts *any* CPU that was already offline at startup. A CPU you took offline by other means will therefore be brought back online when Process Lasso exits.
+
+---
+
+## Changelog
+
+Current version: **[1.5.3](CHANGELOG.md#153--2026-10-01)**. Earlier releases are in [CHANGELOG.md](CHANGELOG.md).
+
+### What's New in 1.5.3
+
+**Fixed: deleting a rule left it in effect.** Deleting, disabling or changing a rule
+never undid what it had already set, so every process it had touched kept its cores
+and priority until it exited — which looked exactly like the delete had not worked.
+A process no longer covered by any rule now gets its settings back: affinity to your
+default affinity if you set one, otherwise to what it had before (or every CPU), and
+its priorities to what they were. Anything you changed by hand since is left alone.
+
+**Fixed: saving a gaming profile could undo other settings.** The Gaming Mode and
+Settings tabs saved their start-up copy of the whole configuration, which could
+silently put back old ProBalance settings and exemptions.
+
+**Fixed: "Start with desktop session" never worked from the AppImage.** The service
+pointed at the AppImage's temporary mount. Untick and re-tick it once to repair an
+existing one.
